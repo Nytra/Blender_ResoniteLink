@@ -15,7 +15,7 @@ bl_info = {
     "name": "Blender_resonitelink",
     "author": "Nytra",
     "description": "",
-    "blender": (2, 80, 0),
+    "blender": (4, 2, 0),
     "version": (0, 0, 1),
     "location": "",
     "warning": "",
@@ -23,15 +23,20 @@ bl_info = {
 }
 
 import bpy
-from resonitelink.models.datamodel import Float3, Field_String
+from bpy import context
+from resonitelink.models.datamodel import Float3, Field_String, FloatQ, Field_Uri, Reference
+from resonitelink.models.assets.mesh.raw_data import TriangleSubmeshRawData
 from resonitelink import ResoniteLinkClient, ResoniteLinkWebsocketClient
 import logging
-import asyncio, threading
+import asyncio, threading, time
 
 client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG)
 doThing = False
 shutdown = False
 clientStarted = False
+currentContext : bpy.types.Context
+queuedActions = []
+lock = threading.Lock()
 
 class TestResoniteLink(bpy.types.Operator):
     """Test ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
@@ -39,12 +44,71 @@ class TestResoniteLink(bpy.types.Operator):
     bl_label = "Test ResoniteLink"         # Display name in the interface.
     bl_options = {'REGISTER', 'UNDO'}  # Enable undo for the operator.
 
-    def execute(self, context):        # execute() is called when running the operator.
-        global doThing
+    portTest: bpy.props.IntProperty(name="Port", default=2, min=1, max=100)
 
-        doThing = True
+    def execute(self, context):        # execute() is called when running the operator.
+        global doThing, currentContext, lock
+
+        currentContext = context
+        #doThing = True
+
+        #asyncio.run(self.doThing())
+
+        lock.acquire()
+
+        queuedActions.append(self.doThing)
+
+        lock.release()
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
+    
+    async def doThing(self):
+        global currentContext, client
+
+        txt = "Hello from Blender!"
+
+        # Adds a new slot. Since no parent was specified, it will be added to the world root by default.
+        slot = await client.add_slot(name=txt, position=Float3(0, 1.5, 0))
+
+        # Adds a TextRenderer component to the newly created slot.
+        await slot.add_component("[FrooxEngine]FrooxEngine.TextRenderer",
+            # Sets the initial value of the string field 'Text' on the component.
+            Text=Field_String(value=txt)
+        )
+
+        scene = currentContext.scene
+        for obj in scene.objects:
+            slot = await client.add_slot(name=obj.data.name, 
+                                         position=Float3(obj.location.x, obj.location.y, obj.location.z), 
+                                         rotation=FloatQ(obj.rotation_euler.to_quaternion().x, obj.rotation_euler.to_quaternion().y, obj.rotation_euler.to_quaternion().z, obj.rotation_euler.to_quaternion().w),
+                                         scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
+                                         tag=obj.data.id_type)
+            #print(obj.type)
+            if obj.data.id_type == "MESH":
+                mesh = obj.to_mesh()
+                verts = []
+                for vert in mesh.vertices.values():
+                    verts.append(Float3(vert.co.x, vert.co.y, vert.co.z))
+                tris = mesh.loop_triangles.values()
+                indices = []
+                for tri in tris:
+                    for idx in tri.vertices:
+                        indices.append(idx)
+                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ])
+                meshComp = await slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
+                                   URL=Field_Uri(value=asset_url))
+                await slot.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
+                                         Mesh=Reference(target_id=meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"))
+                obj.to_mesh_clear()
+            # if obj.type == 'MESH':
+            #     mesh = obj.to_mesh()
+            #     verts = []
+            #     for vert in mesh.vertices.values():
+            #         verts.append(Float3(vert.co.x, vert.co.y, vert.co.z))
+            #     asset_url = await client.import_mesh_raw_data(positions=verts)
+            #     slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
+            #                        URL=Field_Uri(value=asset_url))
+            #     obj.to_mesh_clear()
     
 
 def menu_func(self, context):
@@ -52,23 +116,20 @@ def menu_func(self, context):
 
 @client.on_started
 async def mainLoop(client : ResoniteLinkClient):
-    global doThing, shutdown
+    global doThing, shutdown, currentContext, lock
 
     while (True):
-        if doThing:
-            txt = "Hello from Blender!"
+        
 
-            # Adds a new slot. Since no parent was specified, it will be added to the world root by default.
-            slot = await client.add_slot(name=txt, position=Float3(0, 1.5, 0))
-    
-            # Adds a TextRenderer component to the newly created slot.
-            await slot.add_component("[FrooxEngine]FrooxEngine.TextRenderer",
-                # Sets the initial value of the string field 'Text' on the component.
-                Text=Field_String(value=txt)
-            )
+        if len(queuedActions) > 0:
+            lock.acquire()
+            while len(queuedActions) > 0:
+                act = queuedActions[0]
+                await act()
+                queuedActions.remove(act)
+            lock.release()
 
-            doThing = False
-        elif shutdown:
+        if shutdown:
             await client.stop()
             break
 
@@ -87,7 +148,7 @@ def register():
 def startResoLink():
     global client
 
-    port = 41838
+    port = 15314
 
     asyncio.run(client.start(port))
         

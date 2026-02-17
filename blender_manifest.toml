@@ -43,7 +43,7 @@ wheels = [
 #   "./wheels/hexdump-3.3-py3-none-any.whl",
 #   "./wheels/jsmin-3.0.1-py3-none-any.whl",
     "./wheels/websockets-15.0.1-py3-none-any.whl",
-    "./wheels/resonitelink_py-0.1.0b78-py3-none-any.whl"
+    "./wheels/resonitelink_py-0.1.0b79-py3-none-any.whl"
 ]
 
 # Optional: add-ons can list which resources they will require:
