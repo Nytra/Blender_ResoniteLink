@@ -31,10 +31,11 @@ import asyncio, threading
 client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG)
 doThing = False
 shutdown = False
+clientStarted = False
 
-class ObjectMoveX(bpy.types.Operator):
-    """My Object Moving Script"""      # Use this as a tooltip for menu items and buttons.
-    bl_idname = "object.move_x"        # Unique identifier for buttons and menu items to reference.
+class TestResoniteLink(bpy.types.Operator):
+    """Test ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
+    bl_idname = "object.test_resonitelink"        # Unique identifier for buttons and menu items to reference.
     bl_label = "Test ResoniteLink"         # Display name in the interface.
     bl_options = {'REGISTER', 'UNDO'}  # Enable undo for the operator.
 
@@ -47,21 +48,23 @@ class ObjectMoveX(bpy.types.Operator):
     
 
 def menu_func(self, context):
-    self.layout.operator(ObjectMoveX.bl_idname)
+    self.layout.operator(TestResoniteLink.bl_idname)
 
 @client.on_started
 async def mainLoop(client : ResoniteLinkClient):
-    global doThing
+    global doThing, shutdown
 
     while (True):
         if doThing:
+            txt = "Hello from Blender!"
+
             # Adds a new slot. Since no parent was specified, it will be added to the world root by default.
-            slot = await client.add_slot(name="Hello World Slot", position=Float3(0, 1.5, 0))
+            slot = await client.add_slot(name=txt, position=Float3(0, 1.5, 0))
     
             # Adds a TextRenderer component to the newly created slot.
             await slot.add_component("[FrooxEngine]FrooxEngine.TextRenderer",
                 # Sets the initial value of the string field 'Text' on the component.
-                Text=Field_String(value="Hello, world!")
+                Text=Field_String(value=txt)
             )
 
             doThing = False
@@ -72,24 +75,31 @@ async def mainLoop(client : ResoniteLinkClient):
         await asyncio.sleep(1)
 
 def register():
-    bpy.utils.register_class(ObjectMoveX)
+    global clientStarted
+
+    bpy.utils.register_class(TestResoniteLink)
     bpy.types.VIEW3D_MT_object.append(menu_func)  # Adds the new operator to an existing menu.
 
-    threading.Thread(target=startResoLink).start()
+    if not clientStarted:
+        clientStarted = True
+        threading.Thread(target=startResoLink).start()
 
 def startResoLink():
     global client
+
     port = 41838
+
     asyncio.run(client.start(port))
+        
 
 def unregister():
     global shutdown
 
-    bpy.utils.unregister_class(ObjectMoveX)
+    bpy.utils.unregister_class(TestResoniteLink)
     bpy.types.VIEW3D_MT_object.remove(menu_func)
 
     shutdown = True
-    
+
 
 # This allows you to run the script directly from Blender's Text editor
 # to test the add-on without having to install it.

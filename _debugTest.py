@@ -1,7 +1,7 @@
 """ from resonitelink.models.datamodel import Float3, Field_String
 from resonitelink import ResoniteLinkClient, ResoniteLinkWebsocketClient
 import logging
-import asyncio, threading
+import asyncio
 
 # Creates a new client that connects to ResoniteLink via websocket.
 client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG)
