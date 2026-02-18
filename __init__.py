@@ -38,13 +38,91 @@ currentContext : bpy.types.Context
 queuedActions = []
 lock = threading.Lock()
 
+# class BasicMenu(bpy.types.Menu):
+#     bl_idname = "SCENE_MT_ResoniteLink"
+#     bl_label = "ResoniteLink"
+
+#     def draw(self, context):
+#         layout = self.layout
+
+#         #layout.operator("object.select_all", text="Select/Deselect All").action = 'TOGGLE'
+#         #layout.operator("object.select_all", text="Inverse").action = 'INVERT'
+#         layout.operator("scene.test_resonitelink", text="Test ResoniteLink")
+
+class HelloWorldPanel(bpy.types.Panel):
+    """Creates a ResoniteLink Panel in the Scene properties window"""
+    bl_label = "ResoniteLink Panel"
+    bl_idname = "SCENE_PT_ResoniteLink"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    
+    #port: 
+
+    #bl_property = port
+
+    def draw(self, context):
+        layout = self.layout
+
+        scene = context.scene
+
+        row = layout.row()
+        row.label(text="Hello world!", icon='WORLD_DATA')
+
+        #row = layout.row()
+        #row.label(text="Active object is: " + obj.name)
+
+        #props = self.layout.operator('scene.test_resonitelink')
+        #scene["ResoniteLink_port"] = 
+        row = layout.row()
+        row.prop(scene, "ResoniteLink_port")
+
+        row = layout.row()
+        row.operator("scene.connect_resonitelink")
+
+        row = layout.row()
+        row.operator("scene.test_resonitelink")
+
+class ConnectResoniteLink(bpy.types.Operator):
+    """Connect ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
+    bl_idname = "scene.connect_resonitelink"        # Unique identifier for buttons and menu items to reference.
+    bl_label = "Connect ResoniteLink"         # Display name in the interface.
+    bl_options = {'REGISTER'}
+    
+    @classmethod
+    def poll(cls, context):
+        global clientStarted
+        return not clientStarted
+
+    def execute(self, context):        # execute() is called when running the operator.
+        global currentContext, clientStarted
+
+        currentContext = context
+
+        if not clientStarted:
+            clientStarted = True
+            threading.Thread(target=self.startResoLink).start()
+            return {'FINISHED'}            # Lets Blender know the operator finished successfully.
+        
+        return {'CANCELLED'}
+
+    def startResoLink(self):
+        global client, currentContext
+
+        port = currentContext.scene.ResoniteLink_port
+
+        asyncio.run(client.start(port))
+        
+
 class TestResoniteLink(bpy.types.Operator):
     """Test ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
-    bl_idname = "object.test_resonitelink"        # Unique identifier for buttons and menu items to reference.
+    bl_idname = "scene.test_resonitelink"        # Unique identifier for buttons and menu items to reference.
     bl_label = "Test ResoniteLink"         # Display name in the interface.
-    bl_options = {'REGISTER', 'UNDO'}  # Enable undo for the operator.
-
-    portTest: bpy.props.IntProperty(name="Port", default=2, min=1, max=100)
+    bl_options = {'REGISTER'}  # Enable undo for the operator.
+    
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and clientStarted == True
 
     def execute(self, context):        # execute() is called when running the operator.
         global currentContext, lock
@@ -62,7 +140,7 @@ class TestResoniteLink(bpy.types.Operator):
     async def doThing(self):
         global currentContext, client
 
-        txt = "Hello from Blender!"
+        """ txt = "Hello from Blender!"
 
         # Adds a new slot. Since no parent was specified, it will be added to the world root by default.
         slot = await client.add_slot(name=txt, position=Float3(0, 1.5, 0))
@@ -71,36 +149,35 @@ class TestResoniteLink(bpy.types.Operator):
         await slot.add_component("[FrooxEngine]FrooxEngine.TextRenderer",
             # Sets the initial value of the string field 'Text' on the component.
             Text=Field_String(value=txt)
-        )
+        ) """
 
         scene = currentContext.scene
         for obj in scene.objects:
+            logger.log(logging.INFO, f"{obj.name}, {obj.type}")
+            quat = obj.rotation_euler.to_quaternion()
             slot = await client.add_slot(name=obj.data.name, 
                                          position=Float3(obj.location.x, obj.location.y, obj.location.z), 
-                                         rotation=FloatQ(obj.rotation_euler.to_quaternion().x, obj.rotation_euler.to_quaternion().y, obj.rotation_euler.to_quaternion().z, obj.rotation_euler.to_quaternion().w),
+                                         rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
                                          scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
                                          tag=obj.data.id_type)
-            logger.log(logging.INFO, obj.type)
             if obj.data.id_type == "MESH":
-                mesh = obj.to_mesh()
+                mesh = obj.to_mesh(preserve_all_data_layers=True)
                 verts = []
-                for vert in mesh.vertices.values():
+                for vert in mesh.vertices:
                     verts.append(Float3(vert.co.x, vert.co.y, vert.co.z))
-                tris = mesh.loop_triangles.values()
+                tris = mesh.loop_triangles
                 indices = []
                 for tri in tris:
                     for idx in tri.vertices:
                         indices.append(idx)
-                color_attrs = mesh.color_attributes.values()
+                color_attrs = mesh.color_attributes
                 colors = []
                 for color_attr in color_attrs:
-                    # color_attr is a bpy_prop_collection
-                    vals = color_attr.data.values()
+                    vals = color_attr.data
                     for dat in vals:
                         colors.append(Color(dat.color[0], dat.color[1], dat.color[2], dat.color[3]))
-                        #logger.log(logging.INFO, dat.color)
                 normals = []
-                for norm in mesh.vertex_normals.values():
+                for norm in mesh.vertex_normals:
                     normals.append(Float3(norm.vector.x, norm.vector.y, norm.vector.z))
                 asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals)
                 meshComp = await slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
@@ -113,15 +190,14 @@ class TestResoniteLink(bpy.types.Operator):
                 obj.to_mesh_clear()
     
 
-def menu_func(self, context):
-    self.layout.operator(TestResoniteLink.bl_idname)
+# def menu_func(self, context):
+#     self.layout.operator(TestResoniteLink.bl_idname)
 
 @client.on_started
 async def mainLoop(client : ResoniteLinkClient):
     global shutdown, currentContext, lock
 
     while (True):
-        
 
         if len(queuedActions) > 0:
             lock.acquire()
@@ -138,28 +214,27 @@ async def mainLoop(client : ResoniteLinkClient):
         await asyncio.sleep(1)
 
 def register():
-    global clientStarted
+    #global clientStarted
 
     bpy.utils.register_class(TestResoniteLink)
-    bpy.types.VIEW3D_MT_object.append(menu_func)  # Adds the new operator to an existing menu.
+    bpy.utils.register_class(HelloWorldPanel)
+    bpy.utils.register_class(ConnectResoniteLink)
+    #bpy.utils.register_class(BasicMenu)
+    bpy.types.Scene.ResoniteLink_port = bpy.props.IntProperty(name="Websocket Port", default=2000, min=2000, max=65535)
 
-    if not clientStarted:
-        clientStarted = True
-        threading.Thread(target=startResoLink).start()
-
-def startResoLink():
-    global client
-
-    port = 38072
-
-    asyncio.run(client.start(port))
-        
+    #bpy.types.TOPBAR_MT_file.append(BasicMenu.draw)
+    #bpy.ops.wm.call_menu(name="SCENE_MT_ResoniteLink")
+    #bpy.types.VIEW3D_MT_object.append(menu_func)  # Adds the new operator to an existing menu.
 
 def unregister():
     global shutdown
 
     bpy.utils.unregister_class(TestResoniteLink)
-    bpy.types.VIEW3D_MT_object.remove(menu_func)
+    bpy.utils.unregister_class(HelloWorldPanel)
+    bpy.utils.unregister_class(ConnectResoniteLink)
+    #bpy.utils.unregister_class(BasicMenu)
+    del bpy.types.Scene.ResoniteLink_port
+    #bpy.types.VIEW3D_MT_object.remove(menu_func)
 
     shutdown = True
 
