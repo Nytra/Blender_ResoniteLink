@@ -23,12 +23,15 @@ bl_info = {
 }
 
 import bpy
-from bpy import context
-from resonitelink.models.datamodel import Float3, Field_String, FloatQ, Field_Uri, Reference, SyncList, Color
+from resonitelink.models.datamodel import Float3, Field_String, FloatQ, Field_Uri, Reference, SyncList, Color, Component, Slot
+from resonitelink.proxies.datamodel.slot_proxy import SlotProxy
+from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 from resonitelink.models.assets.mesh.raw_data import TriangleSubmeshRawData
+from resonitelink.json import MISSING
 from resonitelink import ResoniteLinkClient, ResoniteLinkWebsocketClient
 import logging
 import asyncio, threading, time
+from collections.abc import Mapping
 
 logger = logging.getLogger("TestLogger")
 client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
@@ -37,6 +40,8 @@ clientStarted = False
 currentContext : bpy.types.Context
 queuedActions = []
 lock = threading.Lock()
+objToSlots = {}
+sceneToSlots = {}
 
 # class BasicMenu(bpy.types.Menu):
 #     bl_idname = "SCENE_MT_ResoniteLink"
@@ -48,6 +53,40 @@ lock = threading.Lock()
 #         #layout.operator("object.select_all", text="Select/Deselect All").action = 'TOGGLE'
 #         #layout.operator("object.select_all", text="Inverse").action = 'INVERT'
 #         layout.operator("scene.test_resonitelink", text="Test ResoniteLink")
+
+class ObjectSlotData:
+    slotProxy : SlotProxy
+    meshComp : ComponentProxy
+    matComp : ComponentProxy
+    meshRenderer : ComponentProxy
+
+    def __init__(self, slotProxy):
+        self.slotProxy = slotProxy
+        self.meshComp = None
+        self.matComp = None
+        self.meshRenderer = None
+
+class SceneSlotData:
+    slotProxy : SlotProxy
+
+    def __init__(self, slotProxy):
+        self.slotProxy = slotProxy
+
+async def slotExists(slotProxy : SlotProxy) -> bool:
+    try:
+        res = await slotProxy.fetch_data()
+        logger.log(logging.INFO, res)
+        return True
+    except:
+        return False
+
+async def componentExists(compProxy : ComponentProxy) -> bool:
+    try:
+        res = await compProxy.fetch_data()
+        logger.log(logging.INFO, res)
+        return True
+    except:
+        return False
 
 class HelloWorldPanel(bpy.types.Panel):
     """Creates a ResoniteLink Panel in the Scene properties window"""
@@ -82,6 +121,7 @@ class HelloWorldPanel(bpy.types.Panel):
 
         row = layout.row()
         row.operator("scene.test_resonitelink")
+
 
 class ConnectResoniteLink(bpy.types.Operator):
     """Connect ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
@@ -152,14 +192,45 @@ class TestResoniteLink(bpy.types.Operator):
         ) """
 
         scene = currentContext.scene
+
+        sceneData : SceneSlotData
+        if not scene in sceneToSlots.keys() or not await slotExists(sceneToSlots[scene].slotProxy):
+            sceneSlotProxy = await client.add_slot(name=scene.name, 
+                                            position=Float3(0, 0, 0), 
+                                            rotation=FloatQ(0, 0, 0, 1),
+                                            scale=Float3(1, 1, 1),
+                                            tag="SceneRoot")
+            sceneData = ObjectSlotData(sceneSlotProxy)
+            sceneToSlots[scene] = sceneData
+        else:
+            sceneData = sceneToSlots[scene]
+            await client.update_slot(sceneData.slotProxy,
+                                         name=scene.name)
+
         for obj in scene.objects:
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
             quat = obj.rotation_euler.to_quaternion()
-            slot = await client.add_slot(name=obj.data.name, 
+
+            slotData : ObjectSlotData
+            if not obj in objToSlots.keys() or not await slotExists(objToSlots[obj].slotProxy):
+                slotProxy = await client.add_slot(name=obj.data.name, 
+                                            position=Float3(obj.location.x, obj.location.y, obj.location.z), 
+                                            rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
+                                            scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
+                                            tag=obj.data.id_type,
+                                            parent=sceneData.slotProxy)
+                slotData = ObjectSlotData(slotProxy)
+                objToSlots[obj] = slotData
+            else:
+                slotData = objToSlots[obj]
+                await client.update_slot(slotData.slotProxy,
+                                         name=obj.data.name, 
                                          position=Float3(obj.location.x, obj.location.y, obj.location.z), 
                                          rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
                                          scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
-                                         tag=obj.data.id_type)
+                                         tag=obj.data.id_type,
+                                         parent=sceneData.slotProxy)
+
             if obj.data.id_type == "MESH":
                 mesh = obj.to_mesh(preserve_all_data_layers=True)
                 verts = []
@@ -179,14 +250,32 @@ class TestResoniteLink(bpy.types.Operator):
                 normals = []
                 for norm in mesh.vertex_normals:
                     normals.append(Float3(norm.vector.x, norm.vector.y, norm.vector.z))
+
                 asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals)
-                meshComp = await slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
-                                   URL=Field_Uri(value=asset_url))
-                mat = await slot.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
-                await slot.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
-                                         Mesh=Reference(target_id=meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
-                                         Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=mat.id)))
-                
+
+                newMesh = False
+                if slotData.meshComp == None or not await componentExists(slotData.meshComp):
+                    slotData.meshComp = await slotData.slotProxy.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
+                                    URL=Field_Uri(value=asset_url))
+                    newMesh = True
+                else:
+                    await client.update_component(slotData.meshComp,
+                                                  URL=Field_Uri(value=asset_url))
+
+                newMat = False
+                if slotData.matComp == None or not await componentExists(slotData.matComp):
+                    slotData.matComp = await slotData.slotProxy.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
+                    newMat = True
+
+                if slotData.meshRenderer == None or not await componentExists(slotData.meshRenderer):
+                    slotData.meshRenderer = await slotData.slotProxy.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
+                                            Mesh=Reference(target_id=slotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
+                                            Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=slotData.matComp.id)))
+                elif newMesh or newMat:
+                    await client.update_component(slotData.meshRenderer, 
+                                                  Mesh=Reference(target_id=slotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
+                                                  Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=slotData.matComp.id)))
+
                 obj.to_mesh_clear()
     
 
