@@ -24,14 +24,14 @@ bl_info = {
 
 import bpy
 from bpy import context
-from resonitelink.models.datamodel import Float3, Field_String, FloatQ, Field_Uri, Reference
+from resonitelink.models.datamodel import Float3, Field_String, FloatQ, Field_Uri, Reference, SyncList, Color
 from resonitelink.models.assets.mesh.raw_data import TriangleSubmeshRawData
 from resonitelink import ResoniteLinkClient, ResoniteLinkWebsocketClient
 import logging
 import asyncio, threading, time
 
-client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG)
-doThing = False
+logger = logging.getLogger("TestLogger")
+client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
 shutdown = False
 clientStarted = False
 currentContext : bpy.types.Context
@@ -47,12 +47,9 @@ class TestResoniteLink(bpy.types.Operator):
     portTest: bpy.props.IntProperty(name="Port", default=2, min=1, max=100)
 
     def execute(self, context):        # execute() is called when running the operator.
-        global doThing, currentContext, lock
+        global currentContext, lock
 
         currentContext = context
-        #doThing = True
-
-        #asyncio.run(self.doThing())
 
         lock.acquire()
 
@@ -83,7 +80,7 @@ class TestResoniteLink(bpy.types.Operator):
                                          rotation=FloatQ(obj.rotation_euler.to_quaternion().x, obj.rotation_euler.to_quaternion().y, obj.rotation_euler.to_quaternion().z, obj.rotation_euler.to_quaternion().w),
                                          scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
                                          tag=obj.data.id_type)
-            #print(obj.type)
+            logger.log(logging.INFO, obj.type)
             if obj.data.id_type == "MESH":
                 mesh = obj.to_mesh()
                 verts = []
@@ -94,21 +91,26 @@ class TestResoniteLink(bpy.types.Operator):
                 for tri in tris:
                     for idx in tri.vertices:
                         indices.append(idx)
-                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ])
+                color_attrs = mesh.color_attributes.values()
+                colors = []
+                for color_attr in color_attrs:
+                    # color_attr is a bpy_prop_collection
+                    vals = color_attr.data.values()
+                    for dat in vals:
+                        colors.append(Color(dat.color[0], dat.color[1], dat.color[2], dat.color[3]))
+                        #logger.log(logging.INFO, dat.color)
+                normals = []
+                for norm in mesh.vertex_normals.values():
+                    normals.append(Float3(norm.vector.x, norm.vector.y, norm.vector.z))
+                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals)
                 meshComp = await slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
                                    URL=Field_Uri(value=asset_url))
+                mat = await slot.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
                 await slot.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
-                                         Mesh=Reference(target_id=meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"))
+                                         Mesh=Reference(target_id=meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
+                                         Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=mat.id)))
+                
                 obj.to_mesh_clear()
-            # if obj.type == 'MESH':
-            #     mesh = obj.to_mesh()
-            #     verts = []
-            #     for vert in mesh.vertices.values():
-            #         verts.append(Float3(vert.co.x, vert.co.y, vert.co.z))
-            #     asset_url = await client.import_mesh_raw_data(positions=verts)
-            #     slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
-            #                        URL=Field_Uri(value=asset_url))
-            #     obj.to_mesh_clear()
     
 
 def menu_func(self, context):
@@ -116,7 +118,7 @@ def menu_func(self, context):
 
 @client.on_started
 async def mainLoop(client : ResoniteLinkClient):
-    global doThing, shutdown, currentContext, lock
+    global shutdown, currentContext, lock
 
     while (True):
         
@@ -148,7 +150,7 @@ def register():
 def startResoLink():
     global client
 
-    port = 15314
+    port = 38072
 
     asyncio.run(client.start(port))
         
@@ -166,4 +168,3 @@ def unregister():
 # to test the add-on without having to install it.
 # if __name__ == "__main__":
 #     register()
-#     doThing = True
