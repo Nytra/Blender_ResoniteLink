@@ -11,16 +11,16 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-bl_info = {
-    "name": "Blender_resonitelink",
-    "author": "Nytra",
-    "description": "",
-    "blender": (4, 2, 0),
-    "version": (0, 0, 1),
-    "location": "",
-    "warning": "",
-    "category": "Generic",
-}
+# bl_info = {
+#     "name": "Blender_resonitelink",
+#     "author": "Nytra",
+#     "description": "",
+#     "blender": (4, 2, 0),
+#     "version": (0, 0, 1),
+#     "location": "",
+#     "warning": "",
+#     "category": "Generic",
+# }
 
 import bpy
 from resonitelink.models.datamodel import * #Float3, Field_String, FloatQ, Field_Uri, Reference, SyncList, Color, Component, Slot
@@ -38,18 +38,20 @@ logger = logging.getLogger("TestLogger")
 client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
 shutdown = False
 clientStarted = False
-currentContext : bpy.types.Context
 queuedActions : list[Callable[[bpy.types.Context], None]] = []
 lock = threading.Lock()
 
-class ID_Slot():
+class ID_SlotData():
 
     def __init__(self, id : bpy.types.ID, slotProxy : SlotProxy):
         self.id : bpy.types.ID = id
         self.slot : SlotProxy = slotProxy
 
 
-class ObjectSlot(ID_Slot):
+class ObjectSlotData(ID_SlotData):
+
+    # def __init__(self, obj : bpy.types.Object, slotData : ID_Slot):
+    #     super().__init__(obj, slotData.slot)
 
     def __init__(self, obj : bpy.types.Object, slotProxy : SlotProxy):
         super().__init__(obj, slotProxy)
@@ -65,17 +67,17 @@ class ObjectSlot(ID_Slot):
     #     return None
 
 
-class MeshSlot(ObjectSlot):
+class MeshSlotData(ObjectSlotData):
 
-    def __init__(self, mesh : bpy.types.Mesh, slotData : ID_Slot):
-        super().__init__(mesh.id_data, slotData.slot)
-        self._init(mesh)
+    # def __init__(self, mesh : bpy.types.Mesh, slotData : ID_Slot):
+    #     super().__init__(mesh.id_data, slotData.slot)
+    #     self._setup(mesh)
 
     def __init__(self, mesh : bpy.types.Mesh, slotProxy : SlotProxy):
         super().__init__(mesh.id_data, slotProxy)
-        self._init(mesh)
+        self._setup(mesh)
     
-    def _init(self, mesh : bpy.types.Mesh):
+    def _setup(self, mesh : bpy.types.Mesh):
         self.meshComp : ComponentProxy = None
         self.matComp : ComponentProxy = None
         self.meshRenderer : ComponentProxy = None
@@ -85,12 +87,16 @@ class MeshSlot(ObjectSlot):
         self.mesh = mesh
         
 
-class SceneSlot(ID_Slot):
+class SceneSlotData(ID_SlotData):
+
     pass
+    
+    # def __init__(self, scene : bpy.types.Scene, slotData : ID_Slot):
+    #     super().__init__(scene, slotData.slot)
 
 
-objToSlotData : dict[bpy.types.Object, ObjectSlot] = {}
-sceneToSlotData : dict[bpy.types.Scene, SceneSlot] = {}
+objToSlotData : dict[bpy.types.Object, ObjectSlotData] = {}
+sceneToSlotData : dict[bpy.types.Scene, SceneSlotData] = {}
 
 # class BasicMenu(bpy.types.Menu):
 #     bl_idname = "SCENE_MT_ResoniteLink"
@@ -169,18 +175,16 @@ class ConnectOperator(bpy.types.Operator):
         return not clientStarted
 
     def execute(self, context):        # execute() is called when running the operator.
-        global currentContext, clientStarted
+        global clientStarted
 
-        currentContext = context
-
-        threading.Thread(target=self.startResoLink).start()
+        threading.Thread(target=self.startResoLink, args=[context]).start()
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
 
-    def startResoLink(self):
-        global client, currentContext, clientStarted
+    def startResoLink(self, context):
+        global client, clientStarted
 
-        port = currentContext.scene.ResoniteLink_port
+        port = context.scene.ResoniteLink_port
 
         try:
             asyncio.run(client.start(port))
@@ -203,9 +207,7 @@ class SendSceneOperator(bpy.types.Operator):
         return context.scene is not None and clientStarted == True
 
     def execute(self, context):        # execute() is called when running the operator.
-        global currentContext, lock
-
-        currentContext = context
+        global lock
 
         lock.acquire()
 
@@ -216,59 +218,59 @@ class SendSceneOperator(bpy.types.Operator):
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
     
     async def doThing(self, context):
-        global currentContext, client
+        global client
 
         logger.log(logging.INFO, "context debug: " + context.scene.name)
 
-        scene = currentContext.scene
+        scene = context.scene
 
-        sceneRootSlotData : SceneSlot
+        sceneSlotData : SceneSlotData
         if not scene in sceneToSlotData.keys() or not await slotExists(sceneToSlotData[scene].slot):
             sceneSlot = await client.add_slot(name=scene.name, 
                                             position=Float3(0, 0, 0), 
                                             rotation=FloatQ(0, 0, 0, 1),
                                             scale=Float3(1, 1, 1),
                                             tag="SceneRoot")
-            sceneRootSlotData = SceneSlot(scene, sceneSlot)
-            sceneToSlotData[scene] = sceneRootSlotData
+            sceneSlotData = SceneSlotData(scene, sceneSlot)
+            sceneToSlotData[scene] = sceneSlotData
         else:
-            sceneRootSlotData = sceneToSlotData[scene]
-            await client.update_slot(sceneRootSlotData.slot,
+            sceneSlotData = sceneToSlotData[scene]
+            await client.update_slot(sceneSlotData.slot,
                                          name=scene.name)
 
         for obj in scene.objects:
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
             quat = obj.rotation_euler.to_quaternion()
 
-            slotData : ObjectSlot
+            slotData : ObjectSlotData
             if not obj in objToSlotData.keys() or not await slotExists(objToSlotData[obj].slot):
-                slot = await client.add_slot(name=obj.data.name, 
+                slot = await client.add_slot(name=obj.name, 
                                             position=Float3(obj.location.x, obj.location.y, obj.location.z), 
                                             rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
                                             scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
-                                            tag=obj.data.id_type,
-                                            parent=sceneRootSlotData.slot)
-                slotData = ObjectSlot(obj, slot)
+                                            tag=obj.type,
+                                            parent=sceneSlotData.slot)
+                slotData = ObjectSlotData(obj, slot)
                 objToSlotData[obj] = slotData
             else:
                 slotData = objToSlotData[obj]
                 await client.update_slot(slotData.slot,
-                                         name=obj.data.name, 
+                                         name=obj.name, 
                                          position=Float3(obj.location.x, obj.location.y, obj.location.z), 
                                          rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
                                          scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
-                                         tag=obj.data.id_type,
-                                         parent=objToSlotData[obj.parent] if obj.parent is not None else sceneRootSlotData.slot)
+                                         tag=obj.type,
+                                         parent=objToSlotData[obj.parent] if obj.parent is not None else sceneSlotData.slot)
 
-            if obj.data.id_type == "MESH":
+            if obj.type == "MESH":
 
                 mesh = obj.data
 
-                if not isinstance(slotData, MeshSlot):
-                    meshSlotData = MeshSlot(mesh, slotData.slot)
+                if not isinstance(slotData, MeshSlotData):
+                    meshSlotData = MeshSlotData(mesh, slotData.slot)
                     objToSlotData[obj] = meshSlotData
                 else:
-                    meshSlotData : MeshSlot = slotData
+                    meshSlotData : MeshSlotData = slotData
 
                 #mesh = obj.to_mesh(preserve_all_data_layers=True)
 
@@ -326,7 +328,7 @@ class SendSceneOperator(bpy.types.Operator):
 
 @client.on_started
 async def mainLoop(client : ResoniteLinkClient):
-    global shutdown, currentContext, lock, clientStarted
+    global shutdown, lock, clientStarted
 
     clientStarted = True
 
