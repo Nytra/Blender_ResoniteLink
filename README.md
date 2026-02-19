@@ -11,3 +11,5 @@ The ResoniteLink panel will appear in the scene properties pane on the right-han
 Type in the websocket port and then hit connect and you can now use the "Send Scene" button to send the current scene hierarchy and meshes to Resonite.
 
 Currently materials and textures won't be sent, nor anything else like lights.
+
+No generative AI was used to create this.
