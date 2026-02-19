@@ -125,7 +125,7 @@ async def componentExists(compProxy : ComponentProxy) -> bool:
 
 class ResoniteLinkMainPanel(bpy.types.Panel):
     """Creates a ResoniteLink Panel in the Scene properties window"""
-    bl_label = "ResoniteLink Panel"
+    bl_label = "ResoniteLink"
     bl_idname = "SCENE_PT_ResoniteLink"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
@@ -136,8 +136,13 @@ class ResoniteLinkMainPanel(bpy.types.Panel):
 
         layout = self.layout
 
-        row = layout.row()
-        row.label(text="Hello world!", icon='WORLD_DATA')
+        if not bpy.app.online_access:
+            row = layout.row()
+            row.label(text="Please enable online-access.\nPreferences->System->Network")
+            return
+
+        #row = layout.row()
+        #row.label(text="Hello world!", icon='WORLD_DATA')
 
         row = layout.row()
         row.label(text="Connection status: " + ("Connected" if clientStarted and not clientError else "Not connected" if not clientError else "ERROR"))
@@ -205,7 +210,7 @@ class ConnectOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         global clientStarted
-        return not clientStarted
+        return not clientStarted and bpy.app.online_access
 
     def execute(self, context):        # execute() is called when running the operator.
         global clientStarted
