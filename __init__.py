@@ -24,6 +24,8 @@ import traceback
 from collections.abc import Callable
 
 logger = logging.getLogger("TestLogger")
+#logger.setLevel(logging.DEBUG)
+#logging.disable(logging.DEBUG)
 client : ResoniteLinkWebsocketClient
 shutdown : bool = False
 clientStarted : bool = False
@@ -76,6 +78,12 @@ class MeshSlotData(ObjectSlotData):
 
     def UpdateMesh(self, mesh : bpy.types.Mesh):
         self.mesh : bpy.types.Mesh = mesh
+
+    def GetObject(self) -> bpy.types.Object:
+        for obj in bpy.data.objects:
+             if obj.data == self.id:
+                 return obj
+        return None
         
 
 class SceneSlotData(ID_SlotData):
@@ -101,7 +109,7 @@ sceneToSlotData : dict[bpy.types.Scene, SceneSlotData] = {}
 #         layout.operator("scene.sendscene_resonitelink", text="Test ResoniteLink")
 
 
-async def slotExists(slotProxy : SlotProxy) -> bool:
+async def slotExistsAsync(slotProxy : SlotProxy) -> bool:
     exists : bool
     try:
         await slotProxy.fetch_data()
@@ -109,10 +117,10 @@ async def slotExists(slotProxy : SlotProxy) -> bool:
     except:
         exists = False
     
-    logger.debug(f"Slot {slotProxy.id}, exists: {exists}")
+    logger.info(f"Slot {slotProxy.id}, exists: {exists}")
     return exists
 
-async def componentExists(compProxy : ComponentProxy) -> bool:
+async def componentExistsAsync(compProxy : ComponentProxy) -> bool:
     exists : bool
     try:
         await compProxy.fetch_data()
@@ -120,7 +128,7 @@ async def componentExists(compProxy : ComponentProxy) -> bool:
     except:
         exists = False
 
-    logger.debug(f"Slot {compProxy.id}, exists: {exists}")
+    logger.info(f"Slot {compProxy.id}, exists: {exists}")
     return exists
 
 class ResoniteLinkMainPanel(bpy.types.Panel):
@@ -222,9 +230,9 @@ class ConnectOperator(bpy.types.Operator):
     def startResoLink(self, context):
         global client, clientStarted, clientError, logger, queuedActions, shutdown, lastError
 
-        client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
-        client.on_started(mainLoop)
-        client.on_stopped(onStopped)
+        client = ResoniteLinkWebsocketClient(logger=logger)
+        client.on_started(mainLoopAsync)
+        client.on_stopped(onStoppedAsync)
         port = context.scene.ResoniteLink_port
         clientError = False
         queuedActions = []
@@ -268,13 +276,63 @@ class SendSceneOperator(bpy.types.Operator):
 
         lock.acquire()
 
-        queuedActions.append(lambda: self.doThing(context))
+        queuedActions.append(lambda: self.sendSceneAsync(context))
 
         lock.release()
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
     
-    async def doThing(self, context):
+    def getObjectPosition(obj : bpy.types.Object) -> Float3:
+        pass
+    
+    async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
+        obj = slotData.GetObject()
+        
+        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
+        localPos = obj.matrix_local.translation
+        localRotQ = obj.matrix_local.to_quaternion()
+        localScale = obj.matrix_local.to_scale()
+        await client.update_slot(slotData.slot,
+                                name=obj.name, 
+                                position=Float3(localPos.x, localPos.y, localPos.z), 
+                                rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+                                scale=Float3(localScale.x, localScale.y, localScale.z),
+                                tag=obj.type,
+                                parent=parentSlotData.slot)
+        
+    async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
+        quat = obj.matrix_local.to_quaternion()
+        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
+        localPos = obj.matrix_local.translation
+        localRotQ = obj.matrix_local.to_quaternion()
+        localScale = obj.matrix_local.to_scale()
+        slot = await client.add_slot(name=obj.name, 
+                                            position=Float3(localPos.x, localPos.y, localPos.z), 
+                                            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+                                            scale=Float3(localScale.x, localScale.y, localScale.z),
+                                            tag=obj.type,
+                                            parent=parentSlotData.slot)
+        slotData = ObjectSlotData(obj, slot)
+        objToSlotData[obj] = slotData
+        return slotData
+    
+    async def ensureSlotExistsForObjectAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
+            slotData : ObjectSlotData
+
+            if obj.parent is not None:# and not obj.parent in objToSlotData.keys():
+                logger.log(logging.INFO, f"Making sure a slot exists for parent object: {obj.parent.name}, {obj.type}")
+                await self.ensureSlotExistsForObjectAsync(obj.parent, context)
+
+            if not obj in objToSlotData.keys() or not await slotExistsAsync(objToSlotData[obj].slot):
+                slotData = await self.addSlotAsync(obj, context)
+            else:
+                slotData = objToSlotData[obj]
+                await self.updateSlotAsync(slotData, context)
+            
+            logger.log(logging.INFO, f"{obj.name}, {obj.type} = {slotData.slot.id}")
+            return slotData
+    
+    async def sendSceneAsync(self, context):
         global client
 
         logger.log(logging.INFO, "context debug: " + context.scene.name)
@@ -282,7 +340,7 @@ class SendSceneOperator(bpy.types.Operator):
         scene = context.scene
 
         sceneSlotData : SceneSlotData
-        if not scene in sceneToSlotData.keys() or not await slotExists(sceneToSlotData[scene].slot):
+        if not scene in sceneToSlotData.keys() or not await slotExistsAsync(sceneToSlotData[scene].slot):
             sceneSlot = await client.add_slot(name=scene.name, 
                                             position=Float3(0, 0, 0), 
                                             rotation=FloatQ(0, 0, 0, 1),
@@ -297,27 +355,9 @@ class SendSceneOperator(bpy.types.Operator):
 
         for obj in scene.objects:
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
-            quat = obj.rotation_euler.to_quaternion()
 
             slotData : ObjectSlotData
-            if not obj in objToSlotData.keys() or not await slotExists(objToSlotData[obj].slot):
-                slot = await client.add_slot(name=obj.name, 
-                                            position=Float3(obj.location.x, obj.location.y, obj.location.z), 
-                                            rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
-                                            scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
-                                            tag=obj.type,
-                                            parent=sceneSlotData.slot)
-                slotData = ObjectSlotData(obj, slot)
-                objToSlotData[obj] = slotData
-            else:
-                slotData = objToSlotData[obj]
-                await client.update_slot(slotData.slot,
-                                         name=obj.name, 
-                                         position=Float3(obj.location.x, obj.location.y, obj.location.z), 
-                                         rotation=FloatQ(quat.x, quat.y, quat.z, quat.w),
-                                         scale=Float3(obj.scale.x, obj.scale.y, obj.scale.z),
-                                         tag=obj.type,
-                                         parent=objToSlotData[obj.parent] if obj.parent is not None else sceneSlotData.slot)
+            slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
 
             if obj.type == "MESH":
 
@@ -355,7 +395,7 @@ class SendSceneOperator(bpy.types.Operator):
                 asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals)
 
                 newMesh = False
-                if meshSlotData.meshComp == None or not await componentExists(meshSlotData.meshComp):
+                if meshSlotData.meshComp == None or not await componentExistsAsync(meshSlotData.meshComp):
                     meshSlotData.meshComp = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
                                     URL=Field_Uri(value=asset_url))
                     newMesh = True
@@ -364,11 +404,11 @@ class SendSceneOperator(bpy.types.Operator):
                                                   URL=Field_Uri(value=asset_url))
 
                 newMat = False
-                if meshSlotData.matComp == None or not await componentExists(meshSlotData.matComp):
+                if meshSlotData.matComp == None or not await componentExistsAsync(meshSlotData.matComp):
                     meshSlotData.matComp = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
                     newMat = True
 
-                if meshSlotData.meshRenderer == None or not await componentExists(meshSlotData.meshRenderer):
+                if meshSlotData.meshRenderer == None or not await componentExistsAsync(meshSlotData.meshRenderer):
                     meshSlotData.meshRenderer = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
                                             Mesh=Reference(target_id=meshSlotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
                                             Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=meshSlotData.matComp.id)))
@@ -384,7 +424,7 @@ class SendSceneOperator(bpy.types.Operator):
 #     self.layout.operator(TestResoniteLink.bl_idname)
 
 #@client.on_started
-async def mainLoop(client : ResoniteLinkClient):
+async def mainLoopAsync(client : ResoniteLinkClient):
     global shutdown, lock, clientStarted, clientError
 
     clientStarted = True
@@ -408,7 +448,7 @@ async def mainLoop(client : ResoniteLinkClient):
         await asyncio.sleep(1)
 
 #@client.on_stopped
-async def onStopped(client : ResoniteLinkClient):
+async def onStoppedAsync(client : ResoniteLinkClient):
     global clientStarted
 
     clientStarted = False
