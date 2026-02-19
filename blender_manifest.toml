@@ -2,20 +2,20 @@ schema_version = "1.0.0"
 
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
-id = "blender_resonitelink"
+id = "resonitelink"
 version = "1.0.0"
-name = "Blender_resonitelink"
+name = "ResoniteLink"
 tagline = "This is another extension"
 maintainer = "Nytra"
 # Supported types: "add-on", "theme"
 type = "add-on"
 
 # Optional link to documentation, support, source files, etc
-# website = "https://extensions.blender.org/add-ons/my-example-package/"
+website = "https://github.com/Nytra/Blender_ResoniteLink"
 
 # Optional list defined by Blender and server, see:
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
-tags = ["Animation", "Sequencer"]
+tags = ["Import-Export", "Pipeline", "System"]
 
 blender_version_min = "4.2.0"
 # # Optional: Blender version that the extension does not support, earlier versions are supported.
@@ -28,13 +28,14 @@ license = [
   "SPDX:GPL-3.0-or-later",
 ]
 # Optional: required by some licenses.
-# copyright = [
+copyright = [
 #   "2002-2024 Developer Name",
 #   "1998 Company Name",
-# ]
+    "2026 Nytra"
+]
 
 # Optional list of supported platforms. If omitted, the extension will be available in all operating systems.
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]
+platforms = ["windows-x64", "linux-x64"]
 # Other supported platforms: "windows-arm64", "macos-x64"
 
 # Optional: bundle 3rd party Python modules.
@@ -46,9 +47,11 @@ wheels = [
     "./wheels/resonitelink_py-0.1.0b79-py3-none-any.whl"
 ]
 
+# does the addon need network resources/permissions? it uses websockets but only on localhost
+
 # Optional: add-ons can list which resources they will require:
 # * files (for access of any filesystem operations)
-# * network (for internet access)
+# * network (for internet access) 
 # * clipboard (to read and/or write the system clipboard)
 # * camera (to capture photos and videos)
 # * microphone (to capture audio)
