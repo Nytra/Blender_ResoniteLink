@@ -1,5 +1,7 @@
 Blender ResoniteLink addon using https://github.com/JackTheFoxOtter/ResoniteLink.py
 
+Minimum Blender version: 4.2.0
+
 To use the add-on you need to enable online-mode in the Blender preferences. Preferences->System->Network
 
 The ResoniteLink panel will appear in the scene properties pane on the right-hand side of the Blender window.
