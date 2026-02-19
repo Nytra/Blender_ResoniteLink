@@ -11,19 +11,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# bl_info = {
-#     "name": "Blender_resonitelink",
-#     "author": "Nytra",
-#     "description": "",
-#     "blender": (4, 2, 0),
-#     "version": (0, 0, 1),
-#     "location": "",
-#     "warning": "",
-#     "category": "Generic",
-# }
-
 import bpy
-from resonitelink.models.datamodel import * #Float3, Field_String, FloatQ, Field_Uri, Reference, SyncList, Color, Component, Slot
+from resonitelink.models.datamodel import *
 from resonitelink.proxies.datamodel.slot_proxy import SlotProxy
 from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 from resonitelink.models.assets.mesh.raw_data import TriangleSubmeshRawData
@@ -35,11 +24,13 @@ import traceback
 from collections.abc import Callable
 
 logger = logging.getLogger("TestLogger")
-client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
-shutdown = False
-clientStarted = False
+client : ResoniteLinkWebsocketClient
+shutdown : bool = False
+clientStarted : bool = False
+clientError : bool = False
 queuedActions : list[Callable[[bpy.types.Context], None]] = []
 lock = threading.Lock()
+lastError : str = ""
 
 class ID_SlotData():
 
@@ -84,7 +75,7 @@ class MeshSlotData(ObjectSlotData):
         self.UpdateMesh(mesh)
 
     def UpdateMesh(self, mesh : bpy.types.Mesh):
-        self.mesh = mesh
+        self.mesh : bpy.types.Mesh = mesh
         
 
 class SceneSlotData(ID_SlotData):
@@ -141,26 +132,68 @@ class ResoniteLinkMainPanel(bpy.types.Panel):
     bl_context = "scene"
 
     def draw(self, context):
-        global clientStarted
+        global clientStarted, clientError
 
         layout = self.layout
-
-        scene = context.scene
 
         row = layout.row()
         row.label(text="Hello world!", icon='WORLD_DATA')
 
         row = layout.row()
-        row.label(text="Connection status: " + "Connected" if clientStarted else "Not connected")
+        row.label(text="Connection status: " + ("Connected" if clientStarted and not clientError else "Not connected" if not clientError else "ERROR"))
 
         row = layout.row()
-        row.prop(scene, "ResoniteLink_port")
+        row.prop(context.scene, "ResoniteLink_port")
 
         row = layout.row()
         row.operator("scene.connect_resonitelink")
 
         row = layout.row()
         row.operator("scene.sendscene_resonitelink")
+
+        row = layout.row()
+        row.operator("scene.disconnect_resonitelink")
+
+        row = layout.row()
+        row.operator("scene.error_resonitelink")
+
+
+class ErrorDialogOperator(bpy.types.Operator):
+    bl_idname = "scene.error_resonitelink"
+    bl_label = "View last error"
+
+    @classmethod
+    def poll(cls, context):
+        global clientError
+        return clientError
+
+    def execute(self, context):
+        global lastError
+        self.report({'ERROR'}, lastError)
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+    
+
+class DisconnectOperator(bpy.types.Operator):
+    """Disconnect from the ResoniteLink websocket"""      # Use this as a tooltip for menu items and buttons.
+    bl_idname = "scene.disconnect_resonitelink"        # Unique identifier for buttons and menu items to reference.
+    bl_label = "Disconnect from ResoniteLink"         # Display name in the interface.
+    bl_options = {'REGISTER'}
+    
+    @classmethod
+    def poll(cls, context):
+        global clientStarted, clientError
+        return clientStarted and not clientError
+
+    def execute(self, context):        # execute() is called when running the operator.
+        global clientStarted, shutdown
+
+        shutdown = True
+
+        return {'FINISHED'}            # Lets Blender know the operator finished successfully.
 
 
 class ConnectOperator(bpy.types.Operator):
@@ -182,25 +215,44 @@ class ConnectOperator(bpy.types.Operator):
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
 
     def startResoLink(self, context):
-        global client, clientStarted
+        global client, clientStarted, clientError, logger, queuedActions, shutdown, lastError
 
+        client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
+        client.on_started(mainLoop)
+        client.on_stopped(onStopped)
         port = context.scene.ResoniteLink_port
+        clientError = False
+        queuedActions = []
+        shutdown = False
+        clientStarted = False
+        clientError = False
 
         try:
             asyncio.run(client.start(port))
         except Exception as e:
-            logger.log(logging.ERROR, "Error in websocket client thread:\n" + "".join(line for line in traceback.format_exception(e)))
+            lastError = "".join(line for line in traceback.format_exception(e))
+            logger.log(logging.ERROR, "Error in websocket client thread:\n" + lastError)
+            clientError = True
 
-            # Create new client because the old one might be stuck in some bad state
-            client = ResoniteLinkWebsocketClient(log_level=logging.DEBUG, logger=logger)
-            clientStarted = False
+            # I don't know how to show the error dialog :(
+            # None of these attempts below work
+
+            #bpy.ops.scene.error_resonitelink('INVOKE_DEFAULT')
+
+            #context.scene.operator_context = 'INVOKE_DEFAULT'
+            #context.window_manager.operators.error_resonitelink()
+
+            # with bpy.context.temp_override(window=context.window, area=context.area):
+            #     bpy.ops.window_manager.error_resonitelink('INVOKE_DEFAULT')
+
+        clientStarted = False
         
 
 class SendSceneOperator(bpy.types.Operator):
     """Sends the current scene to ResoniteLink"""      # Use this as a tooltip for menu items and buttons.
     bl_idname = "scene.sendscene_resonitelink"        # Unique identifier for buttons and menu items to reference.
     bl_label = "Send Scene"         # Display name in the interface.
-    bl_options = {'REGISTER'}  # Enable undo for the operator.
+    bl_options = {'REGISTER'}  
     
     @classmethod
     def poll(cls, context):
@@ -326,11 +378,13 @@ class SendSceneOperator(bpy.types.Operator):
 # def menu_func(self, context):
 #     self.layout.operator(TestResoniteLink.bl_idname)
 
-@client.on_started
+#@client.on_started
 async def mainLoop(client : ResoniteLinkClient):
-    global shutdown, lock, clientStarted
+    global shutdown, lock, clientStarted, clientError
 
     clientStarted = True
+
+    #raise Exception("Test exception")
 
     while (True):
 
@@ -348,7 +402,7 @@ async def mainLoop(client : ResoniteLinkClient):
 
         await asyncio.sleep(1)
 
-@client.on_stopped
+#@client.on_stopped
 async def onStopped(client : ResoniteLinkClient):
     global clientStarted
 
@@ -358,6 +412,8 @@ def register():
     bpy.utils.register_class(SendSceneOperator)
     bpy.utils.register_class(ResoniteLinkMainPanel)
     bpy.utils.register_class(ConnectOperator)
+    bpy.utils.register_class(DisconnectOperator)
+    bpy.utils.register_class(ErrorDialogOperator)
     #bpy.utils.register_class(BasicMenu)
     bpy.types.Scene.ResoniteLink_port = bpy.props.IntProperty(name="Websocket Port", default=2000, min=2000, max=65535)
 
@@ -371,6 +427,8 @@ def unregister():
     bpy.utils.unregister_class(SendSceneOperator)
     bpy.utils.unregister_class(ResoniteLinkMainPanel)
     bpy.utils.unregister_class(ConnectOperator)
+    bpy.utils.unregister_class(DisconnectOperator)
+    bpy.utils.unregister_class(ErrorDialogOperator)
     #bpy.utils.unregister_class(BasicMenu)
     del bpy.types.Scene.ResoniteLink_port
     #bpy.types.VIEW3D_MT_object.remove(menu_func)
