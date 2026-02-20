@@ -1,5 +1,7 @@
 Blender ResoniteLink addon using https://github.com/JackTheFoxOtter/ResoniteLink.py
 
+(Releases use [my fork](https://github.com/Nytra/ResoniteLink.py) until PRs are merged)
+
 Minimum Blender version: 4.2.0
 
 To use the add-on you need to enable online-mode in the Blender preferences. Preferences->System->Network
