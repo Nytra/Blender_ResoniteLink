@@ -52,6 +52,9 @@ class ObjectSlotData(ID_SlotData):
     def GetObject(self) -> bpy.types.Object:
         return self.id
     
+    def GetData(self) -> bpy.types.ID:
+        return self.id.data
+    
     # Can multiple objects have the same data?
     # def GetObject(self) -> bpy.types.Object:
     #     for obj in bpy.data.objects:
@@ -79,11 +82,11 @@ class MeshSlotData(ObjectSlotData):
     def UpdateMesh(self, mesh : bpy.types.Mesh):
         self.mesh : bpy.types.Mesh = mesh
 
-    def GetObject(self) -> bpy.types.Object:
-        for obj in bpy.data.objects:
-             if obj.data == self.id:
-                 return obj
-        return None
+    # def GetObject(self) -> bpy.types.Object:
+    #     for obj in bpy.data.objects:
+    #          if obj == self.id:
+    #              return obj
+    #     return None
         
 
 class SceneSlotData(ID_SlotData):
@@ -269,6 +272,7 @@ class SendSceneOperator(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
+        global clientStarted
         return context.scene is not None and clientStarted == True
 
     def execute(self, context):        # execute() is called when running the operator.
@@ -317,22 +321,22 @@ class SendSceneOperator(bpy.types.Operator):
         return slotData
     
     async def ensureSlotExistsForObjectAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-            slotData : ObjectSlotData
+        slotData : ObjectSlotData
 
-            if obj.parent is not None:# and not obj.parent in objToSlotData.keys():
-                logger.log(logging.INFO, f"Making sure a slot exists for parent object: {obj.parent.name}, {obj.type}")
-                await self.ensureSlotExistsForObjectAsync(obj.parent, context)
+        if obj.parent is not None:# and not obj.parent in objToSlotData.keys():
+            logger.log(logging.INFO, f"Making sure a slot exists for parent object: {obj.parent.name}, {obj.type}")
+            await self.ensureSlotExistsForObjectAsync(obj.parent, context)
 
-            if not obj in objToSlotData.keys() or not await slotExistsAsync(objToSlotData[obj].slot):
-                slotData = await self.addSlotAsync(obj, context)
-            else:
-                slotData = objToSlotData[obj]
-                await self.updateSlotAsync(slotData, context)
-            
-            logger.log(logging.INFO, f"{obj.name}, {obj.type} = {slotData.slot.id}")
-            return slotData
+        if not obj in objToSlotData.keys() or not await slotExistsAsync(objToSlotData[obj].slot):
+            slotData = await self.addSlotAsync(obj, context)
+        else:
+            slotData = objToSlotData[obj]
+            await self.updateSlotAsync(slotData, context)
+        
+        logger.log(logging.INFO, f"{obj.name}, {obj.type} = {slotData.slot.id}")
+        return slotData
     
-    async def sendSceneAsync(self, context):
+    async def sendSceneAsync(self, context : bpy.types.Context):
         global client
 
         logger.log(logging.INFO, "context debug: " + context.scene.name)
@@ -361,7 +365,7 @@ class SendSceneOperator(bpy.types.Operator):
 
             if obj.type == "MESH":
 
-                mesh = obj.data
+                mesh : bpy.types.Mesh = obj.data
 
                 if not isinstance(slotData, MeshSlotData):
                     meshSlotData = MeshSlotData(mesh, slotData.slot)
