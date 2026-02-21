@@ -22,6 +22,8 @@ import asyncio
 import threading
 import traceback
 from collections.abc import Callable
+from mathutils import Vector, Quaternion
+import bmesh
 
 logger = logging.getLogger("TestLogger")
 #logger.setLevel(logging.DEBUG)
@@ -67,6 +69,10 @@ class MeshSlotData(ObjectSlotData):
 
     # def __init__(self, mesh : bpy.types.Mesh, slotData : ID_Slot):
     #     super().__init__(mesh.id_data, slotData.slot)
+    #     self._setup(mesh)
+
+    # def __init__(self, mesh : bpy.types.Mesh, slotProxy : SlotProxy):
+    #     super().__init__(mesh.id_data, slotProxy)
     #     self._setup(mesh)
 
     def __init__(self, mesh : bpy.types.Mesh, slotProxy : SlotProxy):
@@ -133,6 +139,23 @@ async def componentExistsAsync(compProxy : ComponentProxy) -> bool:
 
     logger.info(f"Slot {compProxy.id}, exists: {exists}")
     return exists
+
+def posToResonite(v : Vector) -> Float3:
+    return Float3(v.x * -1, v.z, v.y * -1)
+
+# ToDo: Make this work
+def rotToResonite(q : Quaternion) -> FloatQ:
+
+    #localRotEuler = q.to_euler("XYZ")
+    # localRotEuler.x *= -1
+    # temp = localRotEuler.y
+    # localRotEuler.y = localRotEuler.z
+    # localRotEuler.z = temp * -1
+    #quat_b = Quaternion((1.0, 0.0, 0.0), math.radians(90.0))
+    #quat_c = q @ quat_b
+    #quat_c = localRotEuler.to_quaternion()# @ quat_b
+
+    return FloatQ(q.x, q.y, q.z, q.w)
 
 class ResoniteLinkMainPanel(bpy.types.Panel):
     """Creates a ResoniteLink Panel in the Scene properties window"""
@@ -286,9 +309,6 @@ class SendSceneOperator(bpy.types.Operator):
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
     
-    def getObjectPosition(obj : bpy.types.Object) -> Float3:
-        pass
-    
     async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
         obj = slotData.GetObject()
         
@@ -298,22 +318,21 @@ class SendSceneOperator(bpy.types.Operator):
         localScale = obj.matrix_local.to_scale()
         await client.update_slot(slotData.slot,
                                 name=obj.name, 
-                                position=Float3(localPos.x, localPos.y, localPos.z), 
-                                rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-                                scale=Float3(localScale.x, localScale.y, localScale.z),
+                                position=posToResonite(localPos), 
+                                rotation=rotToResonite(localRotQ),
+                                scale=Float3(localScale.x, localScale.z, localScale.y),
                                 tag=obj.type,
                                 parent=parentSlotData.slot)
         
     async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-        quat = obj.matrix_local.to_quaternion()
         parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
         localPos = obj.matrix_local.translation
         localRotQ = obj.matrix_local.to_quaternion()
         localScale = obj.matrix_local.to_scale()
         slot = await client.add_slot(name=obj.name, 
-                                            position=Float3(localPos.x, localPos.y, localPos.z), 
-                                            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-                                            scale=Float3(localScale.x, localScale.y, localScale.z),
+                                            position=posToResonite(localPos), 
+                                            rotation=rotToResonite(localRotQ),
+                                            scale=Float3(localScale.x, localScale.z, localScale.y),
                                             tag=obj.type,
                                             parent=parentSlotData.slot)
         slotData = ObjectSlotData(obj, slot)
@@ -365,38 +384,77 @@ class SendSceneOperator(bpy.types.Operator):
 
             if obj.type == "MESH":
 
-                mesh : bpy.types.Mesh = obj.data
+                #mesh : bpy.types.Mesh = obj.data
+                #mesh : bpy.types.Mesh = obj.to_mesh(preserve_all_data_layers=True)
+
+                #mesh.calc_tangents()
+                #mesh.calc_loop_triangles()
+
+                # depsgraph = bpy.context.evaluated_depsgraph_get()
+                # evaluated_object = obj.evaluated_get(depsgraph)
+                # mesh = evaluated_object.to_mesh()
 
                 if not isinstance(slotData, MeshSlotData):
-                    meshSlotData = MeshSlotData(mesh, slotData.slot)
+                    meshSlotData = MeshSlotData(obj.data, slotData.slot)
+                    meshSlotData.id = obj
                     objToSlotData[obj] = meshSlotData
                 else:
                     meshSlotData : MeshSlotData = slotData
 
-                #mesh = obj.to_mesh(preserve_all_data_layers=True)
+                bm : bmesh.types.BMesh = bmesh.new()
+                bm.from_mesh(obj.data)
+                if any(attr.name == "sharp_face" for attr in obj.data.attributes):
+                    bmesh.ops.split_edges(bm, edges=bm.edges)
+                bmesh.ops.reverse_faces(bm, faces=bm.faces)
+                tris = bm.calc_loop_triangles()
+
+                #uv_layer = mesh.uv_layers.active.data
+                #logger.log(logging.INFO, f"normals domain: {mesh.normals_domain}")
 
                 verts = []
-                for vert in mesh.vertices:
-                    verts.append(Float3(vert.co.x, vert.co.y, vert.co.z))
+                normal_vecs = []
+                normals = []
+                tangent_vecs = []
+                tangents = []
+                for vert in bm.verts:
+                    verts.append(Float3(vert.co.x * -1, vert.co.z, vert.co.y * -1))
+                    normal_vecs.append([])
+                    normals.append(Float3(0, 0, 0))
+                    tangent_vecs.append([])
+                    tangents.append(Float4(0, 0, 0, -1))
 
-                tris = mesh.loop_triangles
+                for tup in tris:
+                    for loop in tup:
+                        vidx = loop.vert.index
+                        normal_vecs[vidx].append(loop.face.normal)
+                        tangent_vecs[vidx].append(loop.calc_tangent())
+
+                for vert in bm.verts:
+                    vidx = vert.index
+                    sum_n = Vector()
+                    for n in normal_vecs[vidx]:
+                        sum_n += n
+                    avg_normal = sum_n / len(normal_vecs[vidx])
+                    normals[vidx] = Float3(avg_normal.x, avg_normal.z * -1, avg_normal.y) # normal is flipped after reversed winding
+                    sum_t = Vector()
+                    for t in tangent_vecs[vidx]:
+                        sum_t += t
+                    avg_tangent = sum_t / len(tangent_vecs[vidx])
+                    tangents[vidx] = Float4(avg_tangent.x * -1, avg_tangent.z, avg_tangent.y * -1, -1)
+
                 indices = []
-                for tri in tris:
-                    for idx in tri.vertices:
+                for tup in tris:
+                    for idx in [loop.vert.index for loop in tup]:
                         indices.append(idx)
 
-                color_attrs = mesh.color_attributes
+                color_attrs = obj.data.color_attributes
                 colors = []
                 for color_attr in color_attrs:
                     vals = color_attr.data
                     for dat in vals:
                         colors.append(Color(dat.color[0], dat.color[1], dat.color[2], dat.color[3]))
 
-                normals = []
-                for norm in mesh.vertex_normals:
-                    normals.append(Float3(norm.vector.x, norm.vector.y, norm.vector.z))
-
-                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals)
+                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals, tangents=tangents)
 
                 newMesh = False
                 if meshSlotData.meshComp == None or not await componentExistsAsync(meshSlotData.meshComp):
@@ -421,13 +479,9 @@ class SendSceneOperator(bpy.types.Operator):
                                                   Mesh=Reference(target_id=meshSlotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
                                                   Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=meshSlotData.matComp.id)))
 
-                #obj.to_mesh_clear()
+                bm.free()
     
 
-# def menu_func(self, context):
-#     self.layout.operator(TestResoniteLink.bl_idname)
-
-#@client.on_started
 async def mainLoopAsync(client : ResoniteLinkClient):
     global shutdown, lock, clientStarted, clientError
 
@@ -451,7 +505,6 @@ async def mainLoopAsync(client : ResoniteLinkClient):
 
         await asyncio.sleep(1)
 
-#@client.on_stopped
 async def onStoppedAsync(client : ResoniteLinkClient):
     global clientStarted
 
