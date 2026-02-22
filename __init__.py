@@ -108,7 +108,7 @@ def b2u_euler2quaternion(e):
         The output Unity quaternion
     """
     
-    return Euler((e.x, -e.z, -e.y), 'XYZ').to_quaternion()
+    return Euler((e.x, -e.z, e.y), "XYZ").to_quaternion()
 
 class ID_SlotData():
 
@@ -381,10 +381,10 @@ class SendSceneOperator(bpy.types.Operator):
     
     async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
         obj = slotData.GetObject()
-        
         parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
         localPos = obj.matrix_local.translation
-        localRotQ = b2u_euler2quaternion(obj.matrix_local.to_euler())
+        euler = obj.matrix_local.to_euler("XZY")
+        localRotQ = b2u_euler2quaternion(euler)
         localScale = obj.matrix_local.to_scale()
         await client.update_slot(
             slotData.slot,
@@ -399,7 +399,8 @@ class SendSceneOperator(bpy.types.Operator):
     async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
         parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
         localPos = obj.matrix_local.translation
-        localRotQ = b2u_euler2quaternion(obj.matrix_local.to_euler())
+        euler = obj.matrix_local.to_euler("XZY")
+        localRotQ = b2u_euler2quaternion(euler)
         localScale = obj.matrix_local.to_scale()
         slot = await client.add_slot(
             name=obj.name,
@@ -412,6 +413,16 @@ class SendSceneOperator(bpy.types.Operator):
         slotData = ObjectSlotData(obj, slot)
         objToSlotData[obj] = slotData
         return slotData
+    
+    async def addMaterialAsync(self, meshSlotData : MeshSlotData):
+        # TODO: Detect the material type
+        mat_type = "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic"
+        
+        # TODO: Detect whether the material exists already
+        matComp = await meshSlotData.slot.add_component(mat_type)
+        
+        # Add the material to the slot
+        meshSlotData.matComps.append(matComp)  # TODO: Put this material on the assets slot in the world
     
     async def ensureSlotExistsForObjectAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
         slotData : ObjectSlotData
@@ -461,6 +472,8 @@ class SendSceneOperator(bpy.types.Operator):
 
         for obj in scene.objects:
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
+            logger.log(logging.INFO, f"- track axis: {obj.track_axis}")
+            logger.log(logging.INFO, f"- up axis: {obj.up_axis}")
 
             slotData : ObjectSlotData
             slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
@@ -623,15 +636,14 @@ class SendSceneOperator(bpy.types.Operator):
 
                 # Add all materials to the asset slot if they don't exist already
                 newMat = False  # Material flag
-                for mat in mesh.materials:
-                    # TODO: Detect the material type
-                    mat_type = "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic"
-                    
-                    # TODO: Detect whether the material exists already
-                    matComp = await meshSlotData.slot.add_component(mat_type)
-                    
-                    # Add the material to the slot
-                    meshSlotData.matComps.append(matComp)  # TODO: Put this material on the assets slot in the world
+                matCount = len(mesh.materials)
+                if matCount > 0 and len(meshSlotData.matComps) < matCount:
+                    for mat in mesh.materials:
+                        await self.addMaterialAsync(meshSlotData)
+                    newMat = True
+                elif matCount == 0 and len(meshSlotData.matComps) == 0:
+                    # Add default material for debugging purposes
+                    await self.addMaterialAsync(meshSlotData)
                     newMat = True
 
                 # Create material component reference list
