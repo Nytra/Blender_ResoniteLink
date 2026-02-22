@@ -211,9 +211,22 @@ class ErrorDialogOperator(bpy.types.Operator):
         self.report({'ERROR'}, lastError)
         return {'FINISHED'}
 
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_props_dialog(self)
+    # def invoke(self, context, event):
+    #     wm = context.window_manager
+    #     return wm.invoke_props_dialog(self)
+    
+    # def draw(self, context):
+    #     global lastError
+
+    #     layout = self.layout
+    #     col = layout.column()
+    #     col.label(text=lastError)
+
+    #     # row = col.row()
+    #     # row.prop(self, "my_float")
+    #     # row.prop(self, "my_bool")
+
+    #     # col.prop(self, "my_string")
     
 
 class DisconnectOperator(bpy.types.Operator):
