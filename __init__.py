@@ -29,7 +29,7 @@ import traceback
 from collections.abc import Callable
 
 # Add-on file imports
-from interop import *
+from .interop import *
 
 # Global setup
 logger = logging.getLogger("ResoniteLink")
@@ -321,8 +321,7 @@ class SendSceneOperator(bpy.types.Operator):
                 # Set up the mesh slot data for this object
                 if not isinstance(slotData, MeshSlotData):
                     # New slot data
-                    meshSlotData = MeshSlotData(obj.data, slotData.slot)
-                    meshSlotData.id = obj
+                    meshSlotData = MeshSlotData(obj, slotData.slot)
                     objToSlotData[obj] = meshSlotData
                 else:
                     # Existing slot data
