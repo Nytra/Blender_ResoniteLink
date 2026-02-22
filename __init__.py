@@ -386,13 +386,11 @@ class SendSceneOperator(bpy.types.Operator):
                         vpos = mesh.vertices[vidx].co
                         vnor = mesh.loops[loop_idx].normal
                         vuvs = [(layer.name, layer.data[loop_idx].uv) for layer in uv_layers]
+                        vcol = None
                         if (vertex_colors != -1):
                             # Check the domain of the color attribute before assignment
                             col_idx = vidx if (vertex_color_domain == 'POINT') else loop_idx
                             vcol = vertex_colors.data[col_idx].color
-                        else:
-                            # No color attributes
-                            vcol = None
                         
                         # Construct a unique hash for the vertex
                         vhash = (
