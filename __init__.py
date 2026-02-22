@@ -13,8 +13,6 @@
 
 # Blender Imports
 import bpy
-import bmesh
-from mathutils import Euler, Vector, Quaternion
 
 # Resonitelink Imports
 from resonitelink.models.datamodel import *
@@ -30,10 +28,11 @@ import threading
 import traceback
 from collections.abc import Callable
 
+# Add-on file imports
+from .interop import *
+
 # Global setup
-logger = logging.getLogger("TestLogger")
-#logger.setLevel(logging.DEBUG)
-#logging.disable(logging.DEBUG)
+logger = logging.getLogger("ResoniteLink")
 client : ResoniteLinkWebsocketClient
 shutdown : bool = False
 clientStarted : bool = False
@@ -41,156 +40,8 @@ clientError : bool = False
 queuedActions : list[Callable[[bpy.types.Context], None]] = []
 lock = threading.Lock()
 lastError : str = ""
-
-def b2u_coords(x, y, z):
-    """
-    Convert Blender coordinates to Unity coordinates.
-    
-    Parameters
-    ----------
-    x : float
-        The Blender x coordinate
-    y : float
-        The Blender y coordinate
-    z : float
-        The Blender z coordinate
-    
-    Returns
-    -------
-    x : float
-        The converted Unity x coordinate
-    y : float
-        The converted Unity y coordinate
-    z : float
-        The converted Unity z coordinate
-    """
-    
-    #return -x, -z, y
-    return -x, z, -y
-
-def b2u_scale(x, y, z):
-    """
-    Convert Blender scales to Unity scales.
-    
-    Parameters
-    ----------
-    x : float
-        The Blender x scale
-    y : float
-        The Blender y scale
-    z : float
-        The Blender z scale
-    
-    Returns
-    -------
-    x : float
-        The converted Unity x scale
-    y : float
-        The converted Unity y scale
-    z : float
-        The converted Unity z scale
-    """
-    
-    return x, z, y
-
-def b2u_euler2quaternion(e):
-    """
-    Convert Blender Euler rotation to Unity quaternion.
-    
-    Parameters
-    ----------
-    e : mathutils.Euler
-        The input Blender euler rotation
-    
-    Returns
-    -------
-    q : Quaternion
-        The output Unity quaternion
-    """
-    
-    return Euler((e.x, -e.z, e.y), "XYZ").to_quaternion()
-
-class ID_SlotData():
-
-    def __init__(self, id : bpy.types.ID, slotProxy : SlotProxy):
-        self.id : bpy.types.ID = id
-        self.slot : SlotProxy = slotProxy
-
-
-class ObjectSlotData(ID_SlotData):
-
-    # def __init__(self, obj : bpy.types.Object, slotData : ID_Slot):
-    #     super().__init__(obj, slotData.slot)
-
-    def __init__(self, obj : bpy.types.Object, slotProxy : SlotProxy):
-        super().__init__(obj, slotProxy)
-
-    def GetObject(self) -> bpy.types.Object:
-        return self.id
-    
-    def GetData(self) -> bpy.types.ID:
-        return self.id.data
-    
-    # Can multiple objects have the same data?
-    # def GetObject(self) -> bpy.types.Object:
-    #     for obj in bpy.data.objects:
-    #         if obj.data == self.id:
-    #             return obj
-    #     return None
-
-
-class MeshSlotData(ObjectSlotData):
-
-    # def __init__(self, mesh : bpy.types.Mesh, slotData : ID_Slot):
-    #     super().__init__(mesh.id_data, slotData.slot)
-    #     self._setup(mesh)
-
-    # def __init__(self, mesh : bpy.types.Mesh, slotProxy : SlotProxy):
-    #     super().__init__(mesh.id_data, slotProxy)
-    #     self._setup(mesh)
-
-    def __init__(self, mesh : bpy.types.Mesh, slotProxy : SlotProxy):
-        super().__init__(mesh.id_data, slotProxy)
-        self._setup(mesh)
-    
-    def _setup(self, mesh : bpy.types.Mesh):
-        self.meshComp : ComponentProxy = None
-        self.matComps = [] # ComponentProxy = None
-        self.meshRenderer : ComponentProxy = None
-        self.UpdateMesh(mesh)
-
-    def UpdateMesh(self, mesh : bpy.types.Mesh):
-        self.mesh : bpy.types.Mesh = mesh
-
-    # def GetObject(self) -> bpy.types.Object:
-    #     for obj in bpy.data.objects:
-    #          if obj == self.id:
-    #              return obj
-    #     return None
-        
-
-class SceneSlotData(ID_SlotData):
-
-    pass
-    
-    # def __init__(self, scene : bpy.types.Scene, slotData : ID_Slot):
-    #     super().__init__(scene, slotData.slot)
-
-
 objToSlotData : dict[bpy.types.Object, ObjectSlotData] = {}
 sceneToSlotData : dict[bpy.types.Scene, SceneSlotData] = {}
-
-# class BasicMenu(bpy.types.Menu):
-#     bl_idname = "SCENE_MT_ResoniteLink"
-#     bl_label = "ResoniteLink"
-
-#     def draw(self, context):
-#         layout = self.layout
-
-#         #layout.operator("object.select_all", text="Select/Deselect All").action = 'TOGGLE'
-#         #layout.operator("object.select_all", text="Inverse").action = 'INVERT'
-#         layout.operator("scene.sendscene_resonitelink", text="Test ResoniteLink")
-
 
 async def slotExistsAsync(slotProxy : SlotProxy) -> bool:
     exists : bool
@@ -267,23 +118,6 @@ class ErrorDialogOperator(bpy.types.Operator):
         global lastError
         self.report({'ERROR'}, lastError)
         return {'FINISHED'}
-
-    # def invoke(self, context, event):
-    #     wm = context.window_manager
-    #     return wm.invoke_props_dialog(self)
-    
-    # def draw(self, context):
-    #     global lastError
-
-    #     layout = self.layout
-    #     col = layout.column()
-    #     col.label(text=lastError)
-
-    #     # row = col.row()
-    #     # row.prop(self, "my_float")
-    #     # row.prop(self, "my_bool")
-
-    #     # col.prop(self, "my_string")
     
 
 class DisconnectOperator(bpy.types.Operator):
@@ -342,17 +176,6 @@ class ConnectOperator(bpy.types.Operator):
             lastError = "".join(line for line in traceback.format_exception(e))
             logger.log(logging.ERROR, "Error in websocket client thread:\n" + lastError)
             clientError = True
-
-            # I don't know how to show the error dialog :(
-            # None of these attempts below work
-
-            #bpy.ops.scene.error_resonitelink('INVOKE_DEFAULT')
-
-            #context.scene.operator_context = 'INVOKE_DEFAULT'
-            #context.window_manager.operators.error_resonitelink()
-
-            # with bpy.context.temp_override(window=context.window, area=context.area):
-            #     bpy.ops.window_manager.error_resonitelink('INVOKE_DEFAULT')
 
         clientStarted = False
         
@@ -498,8 +321,7 @@ class SendSceneOperator(bpy.types.Operator):
                 # Set up the mesh slot data for this object
                 if not isinstance(slotData, MeshSlotData):
                     # New slot data
-                    meshSlotData = MeshSlotData(obj.data, slotData.slot)
-                    meshSlotData.id = obj
+                    meshSlotData = MeshSlotData(obj, slotData.slot)
                     objToSlotData[obj] = meshSlotData
                 else:
                     # Existing slot data
@@ -687,8 +509,6 @@ class SendSceneOperator(bpy.types.Operator):
                     pass
                 #mesh.free_tangents()
                 eval_obj.to_mesh_clear()
-                
-                #bm.free()
     
 
 async def mainLoopAsync(client : ResoniteLinkClient):
@@ -725,12 +545,7 @@ def register():
     bpy.utils.register_class(ConnectOperator)
     bpy.utils.register_class(DisconnectOperator)
     bpy.utils.register_class(ErrorDialogOperator)
-    #bpy.utils.register_class(BasicMenu)
     bpy.types.Scene.ResoniteLink_port = bpy.props.IntProperty(name="Websocket Port", default=2000, min=2000, max=65535)
-
-    #bpy.types.TOPBAR_MT_file.append(BasicMenu.draw)
-    #bpy.ops.wm.call_menu(name="SCENE_MT_ResoniteLink")
-    #bpy.types.VIEW3D_MT_object.append(menu_func)  # Adds the new operator to an existing menu.
 
 def unregister():
     global shutdown
@@ -740,9 +555,7 @@ def unregister():
     bpy.utils.unregister_class(ConnectOperator)
     bpy.utils.unregister_class(DisconnectOperator)
     bpy.utils.unregister_class(ErrorDialogOperator)
-    #bpy.utils.unregister_class(BasicMenu)
     del bpy.types.Scene.ResoniteLink_port
-    #bpy.types.VIEW3D_MT_object.remove(menu_func)
 
     shutdown = True
 
