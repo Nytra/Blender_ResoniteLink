@@ -6,7 +6,7 @@ Blender ResoniteLink addon using https://github.com/JackTheFoxOtter/ResoniteLink
 
 ### Known issues / Things not implemented yet:
 
-- Doesn't work on Windows without manual intervention (see https://github.com/Nytra/Blender_ResoniteLink/issues/1)
+- Doesn't work with Blender's default bundled Python (see https://github.com/Nytra/Blender_ResoniteLink/issues/1)
 - No sending of custom materials/textures (Defaults to PBS_VertexColorMetallic on everything)
 - No sending of other kinds of Blender objects like lights, cameras, probes
 - Skinned meshes not yet supported
