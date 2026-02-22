@@ -11,20 +11,26 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+# Blender Imports
 import bpy
+import bmesh
+from mathutils import Euler, Vector, Quaternion
+
+# Resonitelink Imports
 from resonitelink.models.datamodel import *
 from resonitelink.proxies.datamodel.slot_proxy import SlotProxy
 from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 from resonitelink.models.assets.mesh.raw_data import TriangleSubmeshRawData
 from resonitelink import ResoniteLinkClient, ResoniteLinkWebsocketClient
+
+# Other imports
 import logging
 import asyncio
 import threading
 import traceback
 from collections.abc import Callable
-from mathutils import Vector, Quaternion
-import bmesh
 
+# Global setup
 logger = logging.getLogger("TestLogger")
 #logger.setLevel(logging.DEBUG)
 #logging.disable(logging.DEBUG)
@@ -35,6 +41,74 @@ clientError : bool = False
 queuedActions : list[Callable[[bpy.types.Context], None]] = []
 lock = threading.Lock()
 lastError : str = ""
+
+def b2u_coords(x, y, z):
+    """
+    Convert Blender coordinates to Unity coordinates.
+    
+    Parameters
+    ----------
+    x : float
+        The Blender x coordinate
+    y : float
+        The Blender y coordinate
+    z : float
+        The Blender z coordinate
+    
+    Returns
+    -------
+    x : float
+        The converted Unity x coordinate
+    y : float
+        The converted Unity y coordinate
+    z : float
+        The converted Unity z coordinate
+    """
+    
+    #return -x, -z, y
+    return -x, z, -y
+
+def b2u_scale(x, y, z):
+    """
+    Convert Blender scales to Unity scales.
+    
+    Parameters
+    ----------
+    x : float
+        The Blender x scale
+    y : float
+        The Blender y scale
+    z : float
+        The Blender z scale
+    
+    Returns
+    -------
+    x : float
+        The converted Unity x scale
+    y : float
+        The converted Unity y scale
+    z : float
+        The converted Unity z scale
+    """
+    
+    return x, z, y
+
+def b2u_euler2quaternion(e):
+    """
+    Convert Blender Euler rotation to Unity quaternion.
+    
+    Parameters
+    ----------
+    e : mathutils.Euler
+        The input Blender euler rotation
+    
+    Returns
+    -------
+    q : Quaternion
+        The output Unity quaternion
+    """
+    
+    return Euler((e.x, -e.z, e.y), "XYZ").to_quaternion()
 
 class ID_SlotData():
 
@@ -81,7 +155,7 @@ class MeshSlotData(ObjectSlotData):
     
     def _setup(self, mesh : bpy.types.Mesh):
         self.meshComp : ComponentProxy = None
-        self.matComp : ComponentProxy = None
+        self.matComps = [] # ComponentProxy = None
         self.meshRenderer : ComponentProxy = None
         self.UpdateMesh(mesh)
 
@@ -139,23 +213,6 @@ async def componentExistsAsync(compProxy : ComponentProxy) -> bool:
 
     logger.info(f"Slot {compProxy.id}, exists: {exists}")
     return exists
-
-def posToResonite(v : Vector) -> Float3:
-    return Float3(v.x * -1, v.z, v.y * -1)
-
-# ToDo: Make this work
-def rotToResonite(q : Quaternion) -> FloatQ:
-
-    #localRotEuler = q.to_euler("XYZ")
-    # localRotEuler.x *= -1
-    # temp = localRotEuler.y
-    # localRotEuler.y = localRotEuler.z
-    # localRotEuler.z = temp * -1
-    #quat_b = Quaternion((1.0, 0.0, 0.0), math.radians(90.0))
-    #quat_c = q @ quat_b
-    #quat_c = localRotEuler.to_quaternion()# @ quat_b
-
-    return FloatQ(q.x, q.y, q.z, q.w)
 
 class ResoniteLinkMainPanel(bpy.types.Panel):
     """Creates a ResoniteLink Panel in the Scene properties window"""
@@ -324,33 +381,48 @@ class SendSceneOperator(bpy.types.Operator):
     
     async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
         obj = slotData.GetObject()
-        
         parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
         localPos = obj.matrix_local.translation
-        localRotQ = obj.matrix_local.to_quaternion()
+        euler = obj.matrix_local.to_euler("XZY")
+        localRotQ = b2u_euler2quaternion(euler)
         localScale = obj.matrix_local.to_scale()
-        await client.update_slot(slotData.slot,
-                                name=obj.name, 
-                                position=posToResonite(localPos), 
-                                rotation=rotToResonite(localRotQ),
-                                scale=Float3(localScale.x, localScale.z, localScale.y),
-                                tag=obj.type,
-                                parent=parentSlotData.slot)
+        await client.update_slot(
+            slotData.slot,
+            name=obj.name, 
+            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)), 
+            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
+            tag=obj.type,
+            parent=parentSlotData.slot
+        )
         
     async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
         parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
         localPos = obj.matrix_local.translation
-        localRotQ = obj.matrix_local.to_quaternion()
+        euler = obj.matrix_local.to_euler("XZY")
+        localRotQ = b2u_euler2quaternion(euler)
         localScale = obj.matrix_local.to_scale()
-        slot = await client.add_slot(name=obj.name, 
-                                            position=posToResonite(localPos), 
-                                            rotation=rotToResonite(localRotQ),
-                                            scale=Float3(localScale.x, localScale.z, localScale.y),
-                                            tag=obj.type,
-                                            parent=parentSlotData.slot)
+        slot = await client.add_slot(
+            name=obj.name,
+            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)),
+            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
+            tag=obj.type,
+            parent=parentSlotData.slot
+        )
         slotData = ObjectSlotData(obj, slot)
         objToSlotData[obj] = slotData
         return slotData
+    
+    async def addMaterialAsync(self, meshSlotData : MeshSlotData):
+        # TODO: Detect the material type
+        mat_type = "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic"
+        
+        # TODO: Detect whether the material exists already
+        matComp = await meshSlotData.slot.add_component(mat_type)
+        
+        # Add the material to the slot
+        meshSlotData.matComps.append(matComp)  # TODO: Put this material on the assets slot in the world
     
     async def ensureSlotExistsForObjectAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
         slotData : ObjectSlotData
@@ -373,126 +445,250 @@ class SendSceneOperator(bpy.types.Operator):
 
         logger.log(logging.INFO, "context debug: " + context.scene.name)
 
+        # Get the main scene (TODO: Support multiple scenes)
         scene = context.scene
 
+        # Create/Update the scene root slot
         sceneSlotData : SceneSlotData
         if not scene in sceneToSlotData.keys() or not await slotExistsAsync(sceneToSlotData[scene].slot):
-            sceneSlot = await client.add_slot(name=scene.name, 
-                                            position=Float3(0, 0, 0), 
-                                            rotation=FloatQ(0, 0, 0, 1),
-                                            scale=Float3(1, 1, 1),
-                                            tag="SceneRoot")
+            sceneSlot = await client.add_slot(
+                name=scene.name,
+                position=Float3(0, 0, 0),
+                rotation=FloatQ(0, 0, 0, 1),
+                scale=Float3(1, 1, 1),
+                tag="SceneRoot"
+            )
             sceneSlotData = SceneSlotData(scene, sceneSlot)
             sceneToSlotData[scene] = sceneSlotData
         else:
             sceneSlotData = sceneToSlotData[scene]
-            await client.update_slot(sceneSlotData.slot,
-                                         name=scene.name)
+            await client.update_slot(
+                sceneSlotData.slot,
+                name=scene.name
+            )
+
+        # Store the current evaluated dependency graph
+        depsgraph = bpy.context.evaluated_depsgraph_get()
 
         for obj in scene.objects:
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
+            logger.log(logging.INFO, f"- track axis: {obj.track_axis}")
+            logger.log(logging.INFO, f"- up axis: {obj.up_axis}")
 
             slotData : ObjectSlotData
             slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
 
             if obj.type == "MESH":
+               # Evaluate mesh data with all current modifiers
+                eval_obj = obj.evaluated_get(depsgraph)
+                mesh = eval_obj.to_mesh()
+                
+                # Calculate custom normals
+                if (hasattr(mesh, 'calc_normals_split')):
+                    # Old method (4.0)
+                    mesh.calc_normals_split()
+                else:
+                    # TODO: New method
+                    #mesh.customdata_custom_splitnormals_add()
+                    pass
+                
+                # Triangulate the evaluated mesh
+                mesh.calc_loop_triangles()
 
-                #mesh : bpy.types.Mesh = obj.data
-                #mesh : bpy.types.Mesh = obj.to_mesh(preserve_all_data_layers=True)
-
-                #mesh.calc_tangents()
-                #mesh.calc_loop_triangles()
-
-                # depsgraph = bpy.context.evaluated_depsgraph_get()
-                # evaluated_object = obj.evaluated_get(depsgraph)
-                # mesh = evaluated_object.to_mesh()
-
+                # Set up the mesh slot data for this object
                 if not isinstance(slotData, MeshSlotData):
+                    # New slot data
                     meshSlotData = MeshSlotData(obj.data, slotData.slot)
                     meshSlotData.id = obj
                     objToSlotData[obj] = meshSlotData
                 else:
+                    # Existing slot data
                     meshSlotData : MeshSlotData = slotData
 
+                """
                 bm : bmesh.types.BMesh = bmesh.new()
                 bm.from_mesh(obj.data)
                 if any(attr.name == "sharp_face" for attr in obj.data.attributes):
                     bmesh.ops.split_edges(bm, edges=bm.edges)
                 bmesh.ops.reverse_faces(bm, faces=bm.faces)
                 tris = bm.calc_loop_triangles()
+                """
 
-                #uv_layer = mesh.uv_layers.active.data
-                #logger.log(logging.INFO, f"normals domain: {mesh.normals_domain}")
-
-                verts = []
-                normal_vecs = []
-                normals = []
-                tangent_vecs = []
-                tangents = []
-                for vert in bm.verts:
-                    verts.append(Float3(vert.co.x * -1, vert.co.z, vert.co.y * -1))
-                    normal_vecs.append([])
-                    normals.append(Float3(0, 0, 0))
-                    tangent_vecs.append([])
-                    tangents.append(Float4(0, 0, 0, -1))
-
-                for tup in tris:
-                    for loop in tup:
-                        vidx = loop.vert.index
-                        normal_vecs[vidx].append(loop.face.normal)
-                        tangent_vecs[vidx].append(loop.calc_tangent())
-
-                for vert in bm.verts:
-                    vidx = vert.index
-                    sum_n = Vector()
-                    for n in normal_vecs[vidx]:
-                        sum_n += n
-                    avg_normal = sum_n / len(normal_vecs[vidx])
-                    normals[vidx] = Float3(avg_normal.x, avg_normal.z * -1, avg_normal.y) # normal is flipped after reversed winding
-                    sum_t = Vector()
-                    for t in tangent_vecs[vidx]:
-                        sum_t += t
-                    avg_tangent = sum_t / len(tangent_vecs[vidx])
-                    tangents[vidx] = Float4(avg_tangent.x * -1, avg_tangent.z, avg_tangent.y * -1, -1)
-
-                indices = []
-                for tup in tris:
-                    for idx in [loop.vert.index for loop in tup]:
-                        indices.append(idx)
-
-                color_attrs = obj.data.color_attributes
-                colors = []
-                for color_attr in color_attrs:
-                    vals = color_attr.data
-                    for dat in vals:
-                        colors.append(Color(dat.color[0], dat.color[1], dat.color[2], dat.color[3]))
-
-                asset_url = await client.import_mesh_raw_data(positions=verts, submeshes=[ TriangleSubmeshRawData(len(tris), indices) ], colors=colors, normals=normals, tangents=tangents)
-
-                newMesh = False
-                if meshSlotData.meshComp == None or not await componentExistsAsync(meshSlotData.meshComp):
-                    meshSlotData.meshComp = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.StaticMesh",
-                                    URL=Field_Uri(value=asset_url))
-                    newMesh = True
+                # Get all UV Sets
+                uv_layers = mesh.uv_layers
+                
+                # Get vertex color attributes (Limited to the first color group)
+                vertex_colors = -1
+                if (len(mesh.vertex_colors) > 0):
+                    # Old way with vertex colors
+                    vertex_colors = mesh.vertex_colors[0]
                 else:
-                    await client.update_component(meshSlotData.meshComp,
-                                                  URL=Field_Uri(value=asset_url))
+                    # New way with color attributes
+                    if (len(mesh.color_attributes) > 0):
+                        vertex_colors = mesh.color_attributes[0]
 
-                newMat = False
-                if meshSlotData.matComp == None or not await componentExistsAsync(meshSlotData.matComp):
-                    meshSlotData.matComp = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
+                # Save a dictionary of unique vertex hashes for fast indexing
+                v_map = {}  # TODO: Make hashing faster probably
+                idmax = 0   # Current maximum vertex ID
+                
+                # Create output lists
+                verts = []  # Position data of each vertex (replicated)
+                colors = []  # Currently limited to 1 color attribute per vertex
+                normals = []  # Normals per vertex
+                tangents = []  # TODO: Add tangents
+                uvs = [[] for _ in uv_layers]  # List of uv lists per uv set
+                submeshes = []  # List of triangle lists per material
+
+                # Loop through all triangles and store their indices according
+                # to their material ID
+                tris = mesh.loop_triangles
+                tri_map = {}  # A dictionary of material ID mapped to triangle indices
+                for tri in tris:
+                    # Get the material ID for this triangle
+                    mat_id = mesh.polygons[tri.polygon_index].material_index
+                    
+                    # If the current material doesn't exist in the map add it
+                    if (mat_id not in tri_map):
+                        tri_map[mat_id] = []
+                    
+                    # Get loop indices
+                    tri_loops = tri.loops
+                    
+                    # Append triangles to the submesh map (reverse winding order)
+                    for loop_idx in reversed(tri_loops):
+                        # Extract vertex information
+                        vidx = mesh.loops[loop_idx].vertex_index
+                        vpos = mesh.vertices[vidx].co
+                        vnor = mesh.loops[loop_idx].normal
+                        vuvs = [(layer.name, layer.data[loop_idx].uv) for layer in uv_layers]
+                        vcol = vertex_colors.data[vidx].color if (vertex_colors != -1) else None
+                        
+                        # Construct a unique hash for the vertex
+                        vhash = (
+                            int(vidx),
+                            (vnor.x, vnor.y, vnor.z),
+                            tuple((name, uv.x, uv.y) for name, uv in vuvs),
+                            (vcol[0], vcol[1], vcol[2], vcol[3]) if (vertex_colors != -1) else None
+                        )
+                        
+                        # Check if the vertex exists uniquely and get its id
+                        v_tid = -1
+                        if (not vhash in v_map):
+                            # Store the new index
+                            v_map[vhash] = idmax
+                            v_tid = idmax
+                            idmax = idmax + 1
+                            
+                            # Store new data for this vertex
+                            verts.append(Float3(
+                                 *b2u_coords(vpos.x, vpos.y, vpos.z)
+                            ))
+                            if (vertex_colors != -1):
+                                colors.append(Color(
+                                    vcol[0], vcol[1], vcol[2], vcol[3]
+                                ))
+                            normals.append(Float3(
+                                *b2u_coords(vnor[0], vnor[1], vnor[2])
+                            ))
+                            for uid, layer in enumerate(vuvs):
+                                uvs[uid].append(layer[1][0])
+                                uvs[uid].append(layer[1][1])
+                        else:
+                            # Retrieve the old index
+                            v_tid = v_map[vhash]
+                        
+                        # Append the vertex index to the triangle map
+                        tri_map[mat_id].append(v_tid)
+                
+                # Expand the triangle map into a list of lists (sorted by material id)
+                for mid in sorted(tri_map):
+                    submeshes.append(tri_map[mid])
+                
+                # TODO: Extract material information
+
+                # Import the raw mesh data into Resonite
+                asset_url = await client.import_mesh_raw_data(
+                    positions=verts,
+                    submeshes=[
+                        TriangleSubmeshRawData(len(tri_indicies)//3, tri_indicies) for tri_indicies in submeshes
+                    ],
+                    colors=colors if (vertex_colors != -1) else None,
+                    normals=normals,
+                    uv_channel_dimensions=[2 for _ in uvs],  # Hard coded to U, V (2D)
+                    uvs=uvs
+                )  # TODO: Add tangents
+
+                # Create/update the mesh component on the slot to point to the mesh data
+                newMesh = False  # Mesh flag
+                if meshSlotData.meshComp == None or not await componentExistsAsync(meshSlotData.meshComp):
+                    # TODO: Check for skinned/static
+                    meshSlotData.meshComp = await meshSlotData.slot.add_component(
+                        "[FrooxEngine]FrooxEngine.StaticMesh",
+                        URL=Field_Uri(value=asset_url)
+                    )
+                    newMesh = True  # New mesh was created
+                else:
+                    # Update the existing mesh with the new uploaded data
+                    await client.update_component(
+                        meshSlotData.meshComp,
+                        URL=Field_Uri(value=asset_url)
+                    )
+
+                # Add all materials to the asset slot if they don't exist already
+                newMat = False  # Material flag
+                matCount = len(mesh.materials)
+                if matCount > 0 and len(meshSlotData.matComps) < matCount:
+                    for mat in mesh.materials:
+                        await self.addMaterialAsync(meshSlotData)
+                    newMat = True
+                elif matCount == 0 and len(meshSlotData.matComps) == 0:
+                    # Add default material for debugging purposes
+                    await self.addMaterialAsync(meshSlotData)
                     newMat = True
 
-                if meshSlotData.meshRenderer == None or not await componentExistsAsync(meshSlotData.meshRenderer):
-                    meshSlotData.meshRenderer = await meshSlotData.slot.add_component("[FrooxEngine]FrooxEngine.MeshRenderer",
-                                            Mesh=Reference(target_id=meshSlotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
-                                            Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=meshSlotData.matComp.id)))
-                elif newMesh or newMat:
-                    await client.update_component(meshSlotData.meshRenderer, 
-                                                  Mesh=Reference(target_id=meshSlotData.meshComp.id, target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"),
-                                                  Materials=SyncList(Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>", target_id=meshSlotData.matComp.id)))
+                # Create material component reference list
+                mat_reflist = [
+                    Reference(
+                        target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
+                        target_id=matComp.id
+                    ) for matComp in meshSlotData.matComps
+                ]
 
-                bm.free()
+                # Create/update the material data
+                if meshSlotData.meshRenderer == None or not await componentExistsAsync(meshSlotData.meshRenderer):
+                    # Add the mesh component to the slot
+                    meshSlotData.meshRenderer = await meshSlotData.slot.add_component(
+                        "[FrooxEngine]FrooxEngine.MeshRenderer",
+                        Mesh=Reference(
+                            target_id=meshSlotData.meshComp.id,
+                            target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
+                        ),
+                        Materials=SyncList(
+                            *mat_reflist
+                        )
+                    )
+                elif newMesh or newMat:
+                    await client.update_component(
+                        meshSlotData.meshRenderer,
+                        Mesh=Reference(
+                            target_id=meshSlotData.meshComp.id,
+                            target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
+                        ),
+                        Materials=SyncList(
+                            *mat_reflist
+                        )
+                    )
+
+                # Clean up data
+                if (hasattr(mesh, 'calc_normals_split')):
+                    mesh.free_normals_split()
+                else:
+                    # mesh.customdata_custom_splitnormals_clear()
+                    pass
+                #mesh.free_tangents()
+                eval_obj.to_mesh_clear()
+                
+                #bm.free()
     
 
 async def mainLoopAsync(client : ResoniteLinkClient):
