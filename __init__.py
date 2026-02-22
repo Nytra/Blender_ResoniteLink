@@ -341,13 +341,16 @@ class SendSceneOperator(bpy.types.Operator):
                 
                 # Get vertex color attributes (Limited to the first color group)
                 vertex_colors = -1
-                if (len(mesh.vertex_colors) > 0):
-                    # Old way with vertex colors
-                    vertex_colors = mesh.vertex_colors[0]
-                else:
+                vertex_color_domain = 'CORNER'  # Default domain
+                if (hasattr(mesh, 'color_attributes')):
                     # New way with color attributes
                     if (len(mesh.color_attributes) > 0):
                         vertex_colors = mesh.color_attributes[0]
+                        vertex_color_domain = vertex_colors.domain
+                else:
+                    # Old way with vertex colors
+                    if (len(mesh.vertex_colors) > 0):
+                        vertex_colors = mesh.vertex_colors
 
                 # Save a dictionary of unique vertex hashes for fast indexing
                 v_map = {}  # TODO: Make hashing faster probably
@@ -383,7 +386,13 @@ class SendSceneOperator(bpy.types.Operator):
                         vpos = mesh.vertices[vidx].co
                         vnor = mesh.loops[loop_idx].normal
                         vuvs = [(layer.name, layer.data[loop_idx].uv) for layer in uv_layers]
-                        vcol = vertex_colors.data[vidx].color if (vertex_colors != -1) else None
+                        if (vertex_colors != -1):
+                            # Check the domain of the color attribute before assignment
+                            col_idx = vidx if (vertex_color_domain == 'POINT') else loop_idx
+                            vcol = vertex_colors.data[col_idx].color
+                        else:
+                            # No color attributes
+                            vcol = None
                         
                         # Construct a unique hash for the vertex
                         vhash = (
