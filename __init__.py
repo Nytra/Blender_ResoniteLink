@@ -529,7 +529,7 @@ class SendSceneOperator(bpy.types.Operator):
                 # Loop through all triangles and store their indices according
                 # to their material ID
                 tris = mesh.loop_triangles
-                tri_map = {}  # A dictionary of triangle indices mapped to material ID
+                tri_map = {}  # A dictionary of material ID mapped to triangle indices
                 for tri in tris:
                     # Get the material ID for this triangle
                     mat_id = mesh.polygons[tri.polygon_index].material_index
@@ -548,7 +548,7 @@ class SendSceneOperator(bpy.types.Operator):
                         vpos = mesh.vertices[vidx].co
                         vnor = mesh.loops[loop_idx].normal
                         vuvs = [(layer.name, layer.data[loop_idx].uv) for layer in uv_layers]
-                        vcol = vertex_colors.data[loop_idx].color if (vertex_colors != -1) else None
+                        vcol = vertex_colors.data[vidx].color if (vertex_colors != -1) else None
                         
                         # Construct a unique hash for the vertex
                         vhash = (
@@ -597,7 +597,7 @@ class SendSceneOperator(bpy.types.Operator):
                 asset_url = await client.import_mesh_raw_data(
                     positions=verts,
                     submeshes=[
-                        TriangleSubmeshRawData(len(tris)//3, tris) for tris in submeshes
+                        TriangleSubmeshRawData(len(tri_indicies)//3, tri_indicies) for tri_indicies in submeshes
                     ],
                     colors=colors if (vertex_colors != -1) else None,
                     normals=normals,
