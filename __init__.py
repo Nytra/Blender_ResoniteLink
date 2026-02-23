@@ -169,6 +169,8 @@ class ConnectOperator(bpy.types.Operator):
         shutdown = False
         clientStarted = False
         clientError = False
+        if lock.locked():
+            lock.release()
 
         try:
             asyncio.run(client.start(port))
@@ -176,8 +178,6 @@ class ConnectOperator(bpy.types.Operator):
             lastError = "".join(line for line in traceback.format_exception(e))
             logger.log(logging.ERROR, "Error in websocket client thread:\n" + lastError)
             clientError = True
-            if lock.locked():
-                lock.release()
 
         clientStarted = False
         
