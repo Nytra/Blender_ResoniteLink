@@ -1,18 +1,36 @@
-Blender ResoniteLink addon using https://github.com/JackTheFoxOtter/ResoniteLink.py
+Blender ResoniteLink extension using https://github.com/JackTheFoxOtter/ResoniteLink.py
 
 (Releases use [my fork](https://github.com/Nytra/ResoniteLink.py/tree/blender) until PRs are merged)
 
 ---
 
-### Known issues / Things not implemented yet:
+### Things currently implemented:
+
+- Static mesh transfer with any number of material slots (submeshes), UVs, normals and vertex colors.
+- No need to apply modifiers first in Blender, you will get what you see on the screen.
+- Object hierarchy replication with correct transforms.
+- Remembers slots and components that were already sent over and will re-use them (so long as you don't restart Blender or Resonite)
+
+---
+
+### Things not yet implemented:
 
 - No sending of custom materials/textures (Defaults to PBS_VertexColorMetallic on everything)
-- No sending of other kinds of Blender objects like lights, cameras, probes
+- No re-creation of non-mesh Blender objects like lights and cameras
 - Skinned meshes not yet supported
+- Grease pencil strokes not yet supported
 
 ---
 
 Minimum Blender version: 4.2.0
+
+---
+
+### Installation:
+
+- See the `Install from Disk` section on [this page](https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html).
+
+---
 
 To use the add-on you need to enable online-mode in the Blender preferences. Preferences->System->Network
 
