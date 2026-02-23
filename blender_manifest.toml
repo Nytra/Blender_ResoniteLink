@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "resonitelink"
-version = "0.1.0"
+version = "0.2.0"
 name = "ResoniteLink"
 tagline = "Add-on enabling export to Resonite via ResoniteLink"
 maintainer = "Nytra"
@@ -27,10 +27,9 @@ blender_version_min = "4.2.0"
 license = [
   "SPDX:GPL-3.0-or-later",
 ]
+
 # Optional: required by some licenses.
 copyright = [
-#   "2002-2024 Developer Name",
-#   "1998 Company Name",
     "2026 Nytra"
 ]
 
@@ -40,12 +39,11 @@ platforms = ["windows-x64", "linux-x64"]
 
 # Optional: bundle 3rd party Python modules.
 # https://docs.blender.org/manual/en/dev/advanced/extensions/python_wheels.html
+
 wheels = [
     "./wheels/websockets-15.0.1-py3-none-any.whl",
-    "./wheels/resonitelink_py-0.1.0b79-py3-none-any.whl"
+    "./wheels/resonitelink_py-0.1.0b91-py3-none-any.whl"
 ]
-
-# does the addon need network resources/permissions? it uses websockets but only on localhost
 
 # Optional: add-ons can list which resources they will require:
 # * files (for access of any filesystem operations)
@@ -60,22 +58,16 @@ wheels = [
 # For each permission it is important to also specify the reason why it is required.
 # Keep this a single short sentence without a period (.) at the end.
 # For longer explanations use the documentation or detail page.
-#
+
 [permissions]
 network = "Make websocket connection on localhost"
-# files = "Import/export FBX from/to disk"
-# clipboard = "Copy and paste bone transforms"
+files = "Export meshes to files on disk"
 
 # Optional: build settings.
 # https://docs.blender.org/manual/en/dev/advanced/extensions/command_line_arguments.html#command-line-args-extension-build
 [build]
-#paths_exclude_pattern = [
-#   "./__pycache__/",
-#   "./.git/",
-#   "./out/",
-#   "./venv/"
-#]
 paths = [
     "__init__.py",
-    "README.md"
+    "README.md",
+    "interop.py"
 ]
