@@ -28,7 +28,9 @@ Minimum Blender version: 4.2.0
 
 ### Installation:
 
-- See the `Install from Disk` section on [this page](https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html).
+- In Blender, go to Edit -> Preferences and select `Get Extensions`, then click the small downwards-pointing arrow button in the top right, then click `Install from Disk`,
+    when prompted, select the zip file downloaded from the [release page](https://github.com/Nytra/Blender_ResoniteLink/releases/latest).
+- For more information, see the `Install from Disk` section on [this page](https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html).
 
 ---
 
