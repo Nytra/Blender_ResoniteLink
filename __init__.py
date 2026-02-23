@@ -83,8 +83,8 @@ class ResoniteLinkMainPanel(bpy.types.Panel):
             row.label(text="Please enable online-access.\nPreferences->System->Network")
             return
 
-        #row = layout.row()
-        #row.label(text="Hello world!", icon='WORLD_DATA')
+        # row = layout.row()
+        # row.label(text="Hello world!", icon='WORLD_DATA')
 
         row = layout.row()
         row.label(text="Connection status: " + ("Connected" if clientStarted and not clientError else "Not connected" if not clientError else "ERROR"))
@@ -158,7 +158,7 @@ class ConnectOperator(bpy.types.Operator):
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
 
     def startResoLink(self, context):
-        global client, clientStarted, clientError, logger, queuedActions, shutdown, lastError
+        global client, clientStarted, clientError, logger, queuedActions, shutdown, lastError, lock
 
         client = ResoniteLinkWebsocketClient(logger=logger)
         client.on_started(mainLoopAsync)
@@ -176,6 +176,8 @@ class ConnectOperator(bpy.types.Operator):
             lastError = "".join(line for line in traceback.format_exception(e))
             logger.log(logging.ERROR, "Error in websocket client thread:\n" + lastError)
             clientError = True
+            if lock.locked():
+                lock.release()
 
         clientStarted = False
         
@@ -188,8 +190,8 @@ class SendSceneOperator(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
-        global clientStarted
-        return context.scene is not None and clientStarted == True
+        global clientStarted, lock, queuedActions
+        return context.scene is not None and clientStarted == True and not (lock.locked() or len(queuedActions) > 0)
 
     def execute(self, context):        # execute() is called when running the operator.
         global lock
@@ -301,10 +303,27 @@ class SendSceneOperator(bpy.types.Operator):
             slotData : ObjectSlotData
             slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
 
-            if obj.type == "MESH":
+            # check if it's a type that stores mesh data 
+            if obj.type in ["MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME", "GREASEPENCIL"]:
+
+                # Grease pencil technically could work but needs extra code to handle it
+                if obj.type == "GREASEPENCIL":
+                    continue
+
                # Evaluate mesh data with all current modifiers
-                eval_obj = obj.evaluated_get(depsgraph)
-                mesh = eval_obj.to_mesh()
+                eval_obj : bpy.types.Object = obj.evaluated_get(depsgraph)
+
+                # if obj.type == "GREASEPENCIL":
+                #     gp : bpy.types.GreasePencil = eval_obj.data
+                #     drawing : bpy.types.GreasePencilDrawing = gp.layers[0].frames[0].drawing
+                #     logger.log(logging.INFO, f"grease pencil strokes: {drawing.strokes}") # strokes is documented on this page: https://developer.blender.org/docs/release_notes/4.3/grease_pencil_migration/
+
+                mesh = eval_obj.to_mesh() # this can throw a RuntimeError in some cases, like for Grease pencil objects whose mesh data can't be accessed this way
+
+                if len(mesh.vertices) == 0:
+                    logger.log(logging.INFO, f"mesh has no vertices, skipping")
+                    eval_obj.to_mesh_clear()
+                    continue
                 
                 # Calculate custom normals
                 if (hasattr(mesh, 'calc_normals_split')):
@@ -362,11 +381,11 @@ class SendSceneOperator(bpy.types.Operator):
                 normals = []  # Normals per vertex
                 tangents = []  # TODO: Add tangents
                 uvs = [[] for _ in uv_layers]  # List of uv lists per uv set
-                submeshes = []  # List of triangle lists per material
+                submeshes = []  # List of lists of triangle indices, per material
 
                 # Loop through all triangles and store their indices according
                 # to their material ID
-                tris = mesh.loop_triangles
+                tris : list[bpy.types.MeshLoopTriangle] = mesh.loop_triangles
                 tri_map = {}  # A dictionary of material ID mapped to triangle indices
                 for tri in tris:
                     # Get the material ID for this triangle
@@ -516,6 +535,8 @@ class SendSceneOperator(bpy.types.Operator):
                     pass
                 #mesh.free_tangents()
                 eval_obj.to_mesh_clear()
+        
+        logger.log(logging.INFO, f"Done!")
     
 
 async def mainLoopAsync(client : ResoniteLinkClient):
