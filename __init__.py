@@ -310,6 +310,10 @@ class SendSceneOperator(bpy.types.Operator):
                 if obj.type == "GREASEPENCIL":
                     continue
 
+                # Only show objects that are active in the renderer
+                if obj.hide_render == True:
+                    continue
+
                # Evaluate mesh data with all current modifiers
                 eval_obj : bpy.types.Object = obj.evaluated_get(depsgraph)
 
