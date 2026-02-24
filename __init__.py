@@ -299,6 +299,9 @@ class SendSceneOperator(bpy.types.Operator):
             logger.log(logging.INFO, f"{obj.name}, {obj.type}")
             logger.log(logging.INFO, f"- track axis: {obj.track_axis}")
             logger.log(logging.INFO, f"- up axis: {obj.up_axis}")
+            logger.log(logging.INFO, f"- hide render: {obj.hide_render}")
+            logger.log(logging.INFO, f"- hide viewport: {obj.hide_viewport}") # doesn't update?
+            logger.log(logging.INFO, f"- visible: {obj.visible_get()}")
 
             slotData : ObjectSlotData
             slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
@@ -311,7 +314,17 @@ class SendSceneOperator(bpy.types.Operator):
                     continue
 
                 # Only show objects that are active in the renderer
-                if obj.hide_render == True:
+                if obj.hide_render or not obj.visible_get():
+                    if isinstance(slotData, MeshSlotData):
+                        # mesh was sent previously
+                        meshSlotData : MeshSlotData = slotData
+                        if not meshSlotData.hidden:
+                            meshSlotData.hidden = True
+                            if await componentExistsAsync(meshSlotData.meshRenderer):
+                                await client.update_component(
+                                    meshSlotData.meshRenderer,
+                                    Enabled=Field_Bool(value=False)
+                                )
                     continue
 
                # Evaluate mesh data with all current modifiers
@@ -325,9 +338,18 @@ class SendSceneOperator(bpy.types.Operator):
                 mesh = eval_obj.to_mesh() # this can throw a RuntimeError in some cases, like for Grease pencil objects whose mesh data can't be accessed this way
 
                 if len(mesh.vertices) == 0:
-                    logger.log(logging.INFO, f"mesh has no vertices, skipping")
+                    logger.log(logging.INFO, f"mesh has no vertices, skipping") # can happen in the case of metaballs- one of them will contain the whole mesh and the rest will be empty
                     eval_obj.to_mesh_clear()
                     continue
+
+                # Set up the mesh slot data for this object
+                if not isinstance(slotData, MeshSlotData):
+                    # New slot data
+                    meshSlotData = MeshSlotData(obj, slotData.slot)
+                    objToSlotData[obj] = meshSlotData
+                else:
+                    # Existing slot data
+                    meshSlotData : MeshSlotData = slotData
                 
                 # Calculate custom normals
                 if (hasattr(mesh, 'calc_normals_split')):
@@ -340,24 +362,6 @@ class SendSceneOperator(bpy.types.Operator):
                 
                 # Triangulate the evaluated mesh
                 mesh.calc_loop_triangles()
-
-                # Set up the mesh slot data for this object
-                if not isinstance(slotData, MeshSlotData):
-                    # New slot data
-                    meshSlotData = MeshSlotData(obj, slotData.slot)
-                    objToSlotData[obj] = meshSlotData
-                else:
-                    # Existing slot data
-                    meshSlotData : MeshSlotData = slotData
-
-                """
-                bm : bmesh.types.BMesh = bmesh.new()
-                bm.from_mesh(obj.data)
-                if any(attr.name == "sharp_face" for attr in obj.data.attributes):
-                    bmesh.ops.split_edges(bm, edges=bm.edges)
-                bmesh.ops.reverse_faces(bm, faces=bm.faces)
-                tris = bm.calc_loop_triangles()
-                """
 
                 # Get all UV Sets
                 uv_layers = mesh.uv_layers
@@ -519,7 +523,8 @@ class SendSceneOperator(bpy.types.Operator):
                             *mat_reflist
                         )
                     )
-                elif newMesh or newMat:
+                elif newMesh or newMat or meshSlotData.hidden:
+                    meshSlotData.hidden = False
                     await client.update_component(
                         meshSlotData.meshRenderer,
                         Mesh=Reference(
@@ -528,7 +533,8 @@ class SendSceneOperator(bpy.types.Operator):
                         ),
                         Materials=SyncList(
                             *mat_reflist
-                        )
+                        ),
+                        Enabled=Field_Bool(value=True)
                     )
 
                 # Clean up data

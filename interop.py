@@ -32,6 +32,7 @@ class MeshSlotData(ObjectSlotData):
         self.meshComp : ComponentProxy = None
         self.matComps : list[ComponentProxy] = [] 
         self.meshRenderer : ComponentProxy = None
+        self.hidden = False
     
 
 class SceneSlotData(ID_SlotData):
