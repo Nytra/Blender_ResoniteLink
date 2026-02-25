@@ -313,8 +313,8 @@ class SendSceneOperator(bpy.types.Operator):
                 if obj.type == "GREASEPENCIL":
                     continue
 
-                # Only show objects that are active in the renderer
-                if obj.hide_render or not obj.visible_get():
+                # Only show objects that are active in the render
+                if obj.hide_render:
                     if isinstance(slotData, MeshSlotData):
                         # mesh was sent previously
                         meshSlotData : MeshSlotData = slotData
