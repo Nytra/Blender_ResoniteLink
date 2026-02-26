@@ -27,6 +27,7 @@ import asyncio
 import threading
 import traceback
 from collections.abc import Callable
+from typing import Any
 
 # Add-on file imports
 from .interop import *
@@ -203,37 +204,30 @@ class SendSceneOperator(bpy.types.Operator):
         lock.release()
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
+
+    def getSlotKwargs(self, obj : bpy.types.Object, context : bpy.types.Context) -> dict[str, Any]:
+        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
+        localPos = obj.matrix_local.translation.to_tuple()
+        euler = obj.matrix_local.to_euler("XZY")
+        localRotQ = b2u_euler2quaternion(euler)
+        localScale = obj.matrix_local.to_scale().to_tuple() # could use obj.scale here which seems to preserve negative scale
+        return {'name': obj.name,
+                'position': Float3(*b2u_coords(*localPos)),
+                'rotation': FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+                'scale': Float3(*b2u_scale(*localScale)),
+                'tag': obj.type,
+                'parent': parentSlotData.slot}
     
     async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
         obj = slotData.GetObject()
-        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
-        localPos = obj.matrix_local.translation
-        euler = obj.matrix_local.to_euler("XZY")
-        localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.matrix_local.to_scale()
         await client.update_slot(
-            slotData.slot,
-            name=obj.name, 
-            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)), 
-            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
-            tag=obj.type,
-            parent=parentSlotData.slot
+            slot=slotData.slot,
+            **self.getSlotKwargs(obj, context)
         )
         
     async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
-        localPos = obj.matrix_local.translation
-        euler = obj.matrix_local.to_euler("XZY")
-        localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.matrix_local.to_scale()
         slot = await client.add_slot(
-            name=obj.name,
-            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)),
-            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
-            tag=obj.type,
-            parent=parentSlotData.slot
+            **self.getSlotKwargs(obj, context)
         )
         slotData = ObjectSlotData(obj, slot)
         objToSlotData[obj] = slotData
