@@ -13,6 +13,7 @@
 
 # Blender Imports
 import bpy
+from mathutils import Vector
 
 # Resonitelink Imports
 from resonitelink.models.datamodel import *
@@ -27,6 +28,8 @@ import asyncio
 import threading
 import traceback
 from collections.abc import Callable
+from typing import Any
+import math
 
 # Add-on file imports
 from .interop import *
@@ -204,36 +207,50 @@ class SendSceneOperator(bpy.types.Operator):
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
     
+    # def getLocalScale(self, obj : bpy.types.Object) -> Vector:
+    #     scale = obj.scale.copy()
+    #     current = obj
+    #     while current.parent is not None:
+    #         scale *= current.parent.scale
+    #         current = current.parent
+    #     return scale
+
+    # def sign(val : Vector, scale):
+    #     return copysign
+
+    def getSlotKwargs(self, obj : bpy.types.Object, context : bpy.types.Context) -> dict[str, Any]:
+        logger.log(logging.INFO, f"obj name: {obj.name}")
+        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
+        localPos = obj.matrix_local.translation.to_tuple()
+        euler = obj.matrix_local.to_euler(obj.rotation_mode)
+        #euler = obj.rotation_euler
+        logger.log(logging.INFO, f"origRot: {euler.x * 180.0 / math.pi} {euler.y * 180.0 / math.pi} {euler.z * 180.0 / math.pi}")
+        localRotQ = b2u_euler2quaternion(euler)
+        localScale = obj.scale.to_tuple()
+        logger.log(logging.INFO, f"localPos: {localPos}")
+        logger.log(logging.INFO, f"location: {obj.location}")
+        eulerRot = localRotQ.to_euler("XYZ")
+        logger.log(logging.INFO, f"localRot: {eulerRot.x * 180.0 / math.pi} {eulerRot.y * 180.0 / math.pi} {eulerRot.z * 180.0 / math.pi}")
+        logger.log(logging.INFO, f"localScale: {localScale}")
+        #signedPos = math.copysign(localPos[0], localScale[0]), math.copysign(localPos[1], localScale[1]), math.copysign(localPos[2], localScale[2])
+        #logger.log(logging.INFO, f"signedPos: {signedPos}")
+        return {'name': obj.name,
+                'position': Float3(*b2u_coords(*localPos)),
+                'rotation': FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
+                'scale': Float3(*b2u_scale(*localScale)),
+                'tag': obj.type,
+                'parent': parentSlotData.slot}
+    
     async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
         obj = slotData.GetObject()
-        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
-        localPos = obj.matrix_local.translation
-        euler = obj.matrix_local.to_euler("XZY")
-        localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.matrix_local.to_scale()
         await client.update_slot(
-            slotData.slot,
-            name=obj.name, 
-            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)), 
-            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
-            tag=obj.type,
-            parent=parentSlotData.slot
+            slot=slotData.slot,
+            **self.getSlotKwargs(obj, context)
         )
         
     async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-        parentSlotData = objToSlotData[obj.parent] if obj.parent is not None else sceneToSlotData[context.scene]
-        localPos = obj.matrix_local.translation
-        euler = obj.matrix_local.to_euler("XZY")
-        localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.matrix_local.to_scale()
         slot = await client.add_slot(
-            name=obj.name,
-            position=Float3(*b2u_coords(localPos.x, localPos.y, localPos.z)),
-            rotation=FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-            scale=Float3(*b2u_scale(localScale.x, localScale.y, localScale.z)),
-            tag=obj.type,
-            parent=parentSlotData.slot
+            **self.getSlotKwargs(obj, context)
         )
         slotData = ObjectSlotData(obj, slot)
         objToSlotData[obj] = slotData
