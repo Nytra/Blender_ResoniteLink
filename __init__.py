@@ -13,7 +13,6 @@
 
 # Blender Imports
 import bpy
-from mathutils import Vector
 
 # Resonitelink Imports
 from resonitelink.models.datamodel import *
@@ -29,7 +28,6 @@ import threading
 import traceback
 from collections.abc import Callable
 from typing import Any
-import math
 
 # Add-on file imports
 from .interop import *
