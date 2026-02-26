@@ -210,7 +210,7 @@ class SendSceneOperator(bpy.types.Operator):
         localPos = obj.matrix_local.translation.to_tuple()
         euler = obj.matrix_local.to_euler("XZY")
         localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.scale.to_tuple()
+        localScale = obj.matrix_local.to_scale().to_tuple() # could use obj.scale here which seems to preserve negative scale
         return {'name': obj.name,
                 'position': Float3(*b2u_coords(*localPos)),
                 'rotation': FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
