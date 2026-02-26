@@ -6,7 +6,7 @@ Blender [ResoniteLink](https://github.com/Yellow-Dog-Man/ResoniteLink) extension
 
 ### Things currently implemented:
 
-- Static mesh transfer with any number of material slots (submeshes), UVs, normals and vertex colors.
+- Static mesh transfer with any number of material slots (submeshes), UVs, normals, tangents and vertex colors.
 - No need to apply modifiers first in Blender.
 - Object hierarchy replication with correct transforms.
 - Remembers slots and components that were already sent over and will re-use them (so long as you don't restart Blender or Resonite)
@@ -15,7 +15,6 @@ Blender [ResoniteLink](https://github.com/Yellow-Dog-Man/ResoniteLink) extension
 
 ### Things not yet implemented:
 
-- Mesh tangents
 - No sending of custom materials/textures (Defaults to PBS_VertexColorMetallic on everything)
 - No re-creation of non-mesh Blender objects like lights and cameras
 - Skinned meshes not yet supported
