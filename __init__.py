@@ -450,7 +450,7 @@ class SendSceneOperator(bpy.types.Operator):
                             ))
                             if hasTangents:
                                 tangents.append(Float4(
-                                    *b2u_coords(*vtan), mesh.loops[loop_idx].bitangent_sign
+                                    *b2u_coords(*vtan), -mesh.loops[loop_idx].bitangent_sign
                                 ))
                             for uid, layer in enumerate(vuvs):
                                 uvs[uid].append(layer[1][0])
