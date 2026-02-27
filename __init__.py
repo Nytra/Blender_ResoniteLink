@@ -353,9 +353,15 @@ class SendSceneOperator(bpy.types.Operator):
                     # TODO: New method
                     #mesh.customdata_custom_splitnormals_add()
                     pass
-                
+
                 # Triangulate the evaluated mesh
                 mesh.calc_loop_triangles()
+
+                hasTangents = False
+                # tangent calculation only works for tris and quads, also it needs a UV map
+                if not any(poly.loop_total < 3 or poly.loop_total > 4 for poly in mesh.polygons) and len(mesh.uv_layers) > 0:
+                    hasTangents = True
+                    mesh.calc_tangents()
 
                 # Get all UV Sets
                 uv_layers = mesh.uv_layers
@@ -381,7 +387,7 @@ class SendSceneOperator(bpy.types.Operator):
                 verts = []  # Position data of each vertex (replicated)
                 colors = []  # Currently limited to 1 color attribute per vertex
                 normals = []  # Normals per vertex
-                tangents = []  # TODO: Add tangents
+                tangents = []  # Tangents per vertex
                 uvs = [[] for _ in uv_layers]  # List of uv lists per uv set
                 submeshes = []  # List of lists of triangle indices, per material
 
@@ -407,6 +413,7 @@ class SendSceneOperator(bpy.types.Operator):
                         vpos = mesh.vertices[vidx].co
                         vnor = mesh.loops[loop_idx].normal
                         vuvs = [(layer.name, layer.data[loop_idx].uv) for layer in uv_layers]
+                        vtan = mesh.loops[loop_idx].tangent
                         vcol = None
                         if (vertex_colors != -1):
                             # Check the domain of the color attribute before assignment
@@ -418,7 +425,8 @@ class SendSceneOperator(bpy.types.Operator):
                             int(vidx),
                             (vnor.x, vnor.y, vnor.z),
                             tuple((name, uv.x, uv.y) for name, uv in vuvs),
-                            (vcol[0], vcol[1], vcol[2], vcol[3]) if (vertex_colors != -1) else None
+                            (vcol[0], vcol[1], vcol[2], vcol[3]) if (vertex_colors != -1) else None,
+                            (vtan.x, vtan.y, vtan.z) if hasTangents else None
                         )
                         
                         # Check if the vertex exists uniquely and get its id
@@ -440,6 +448,10 @@ class SendSceneOperator(bpy.types.Operator):
                             normals.append(Float3(
                                 *b2u_coords(vnor[0], vnor[1], vnor[2])
                             ))
+                            if hasTangents:
+                                tangents.append(Float4(
+                                    *b2u_coords(*vtan), mesh.loops[loop_idx].bitangent_sign
+                                ))
                             for uid, layer in enumerate(vuvs):
                                 uvs[uid].append(layer[1][0])
                                 uvs[uid].append(layer[1][1])
@@ -465,8 +477,9 @@ class SendSceneOperator(bpy.types.Operator):
                     colors=colors if (vertex_colors != -1) else None,
                     normals=normals,
                     uv_channel_dimensions=[2 for _ in uvs],  # Hard coded to U, V (2D)
-                    uvs=uvs
-                )  # TODO: Add tangents
+                    uvs=uvs,
+                    tangents=tangents
+                )
 
                 # Create/update the mesh component on the slot to point to the mesh data
                 newMesh = False  # Mesh flag
@@ -537,7 +550,10 @@ class SendSceneOperator(bpy.types.Operator):
                 else:
                     # mesh.customdata_custom_splitnormals_clear()
                     pass
-                #mesh.free_tangents()
+
+                if hasTangents:
+                    mesh.free_tangents()
+                    
                 eval_obj.to_mesh_clear()
         
         logger.log(logging.INFO, f"Done!")
