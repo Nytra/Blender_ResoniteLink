@@ -114,7 +114,9 @@ def collectMeshData(mesh : bpy.types.Mesh):
     for mid in sorted(tri_map):
         submeshes.append(tri_map[mid])
     
-    # TODO: Extract material information
+    # for mat in mesh.materials:
+    #     if MaterialSlotData.Get(mat) is None:
+    #         matSlotData = MaterialSlotData(mat)
 
     return {
         'positions': verts,

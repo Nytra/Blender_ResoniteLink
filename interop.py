@@ -8,9 +8,42 @@ from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 
 class ID_SlotData():
 
+    idToSlotData : dict[bpy.types.ID, 'ID_SlotData'] = {}
+
     def __init__(self, id : bpy.types.ID, slotProxy : SlotProxy):
         self.id : bpy.types.ID = id
         self.slot : SlotProxy = slotProxy
+        ID_SlotData.idToSlotData[self.id] = self
+
+    # async def createSlotAsync(self):
+    #     pass
+
+    # async def updateSlotAsync(self):
+    #     pass
+
+    # async def createOrUpdateSlotAsync(self):
+    #     if not self.id in ID_SlotData.idToSlotData:
+    #         await self.createSlotAsync()
+    #     else:
+    #         await self.updateSlotAsync()
+
+
+class MaterialSlotData(ID_SlotData):
+
+    # ToDo: probably should make the other classes follow this pattern with the Get classmethod
+    #matToSlotData = dict[bpy.types.Material, 'MaterialSlotData'] = {}
+
+    def __init__(self, mat : bpy.types.Material, slotProxy : SlotProxy):
+        super().__init__(mat, slotProxy)
+        self.diffuseColor = mat.diffuse_color
+        self.textures = mat.texture_paint_slots
+        
+    @classmethod
+    def Get(cls, mat : bpy.types.Material) -> 'MaterialSlotData':
+        if mat in ID_SlotData.idToSlotData:
+            return ID_SlotData.idToSlotData[mat]
+        else:
+            return None
 
 
 class ObjectSlotData(ID_SlotData):
