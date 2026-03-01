@@ -34,15 +34,6 @@ from .interop import *
 from .asset_data import *
 
 class ResoniteLinkController:
-    
-    logger : logging.Logger
-    client : ResoniteLinkWebsocketClient
-    shutdown : bool = False
-    clientStarted : bool = False
-    clientError : bool = False
-    queuedActions : list[Callable[[bpy.types.Context], None]] = []
-    lock = threading.Lock()
-    lastError : str = ""
 
     sceneToResoniteLinkController : dict[bpy.types.Scene, 'ResoniteLinkController'] = {}
 
@@ -60,23 +51,28 @@ class ResoniteLinkController:
 
     def __init__(self, scene : bpy.types.Scene):
         ResoniteLinkController.sceneToResoniteLinkController[scene] = self
+        self.resetState()
+
+    def resetState(self):
+        
+        self.clientError = False
+        self.queuedActions : list[Callable[[bpy.types.Context], None]] = []
+        self.shutdown = False
+        self.clientStarted = False
+        self.clientError = False
+        self.lock = threading.Lock()
+        self.lastError = ""
     
     def startResoLink(self, context):
+        
+        port = context.scene.ResoniteLink_port
 
         self.logger = logging.getLogger("ResoniteLink")
         self.client = ResoniteLinkWebsocketClient(logger=self.logger)
         self.client.on_started(self.mainLoopAsync)
         self.client.on_stopped(self.onStoppedAsync)
-        port = context.scene.ResoniteLink_port
-        self.clientError = False
-        self.queuedActions = []
-        self.shutdown = False
-        self.clientStarted = False
-        self.clientError = False
 
-        # if there was previously an exception in this controller's websocket thread, the lock might still be taken
-        if self.lock.locked():
-            self.lock.release()
+        self.resetState() # allowing re-using the same instance after it has thrown an error
 
         try:
             asyncio.run(self.client.start(port))
@@ -385,7 +381,7 @@ class DisconnectOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         controller = ResoniteLinkController.Get(context.scene)
-        return controller.clientStarted and not controller.clientError
+        return controller.clientStarted and not controller.clientError and not controller.shutdown
 
     def execute(self, context):        # execute() is called when running the operator.
 
@@ -423,7 +419,7 @@ class SendSceneOperator(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         controller = ResoniteLinkController.Get(context.scene)
-        return context.scene is not None and controller.clientStarted == True and not (controller.lock.locked() or len(controller.queuedActions) > 0)
+        return context.scene is not None and controller.clientStarted == True and not (controller.lock.locked() or len(controller.queuedActions) > 0) and not controller.shutdown
 
     def execute(self, context):        # execute() is called when running the operator.
         controller = ResoniteLinkController.Get(context.scene)
