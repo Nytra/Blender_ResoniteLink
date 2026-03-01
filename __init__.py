@@ -33,28 +33,6 @@ from typing import Any
 from .interop import *
 from .asset_data import *
 
-# async def slotExistsAsync(slotProxy : SlotProxy) -> bool:
-#     exists : bool
-#     try:
-#         await slotProxy.fetch_data()
-#         exists = True
-#     except:
-#         exists = False
-    
-#     logger.info(f"Slot {slotProxy.id}, exists: {exists}")
-#     return exists
-
-# async def componentExistsAsync(compProxy : ComponentProxy) -> bool:
-#     exists : bool
-#     try:
-#         await compProxy.fetch_data()
-#         exists = True
-#     except:
-#         exists = False
-
-#     logger.info(f"Slot {compProxy.id}, exists: {exists}")
-#     return exists
-
 class ResoniteLinkController:
     
     logger : logging.Logger
@@ -67,9 +45,6 @@ class ResoniteLinkController:
     lastError : str = ""
 
     sceneToResoniteLinkController : dict[bpy.types.Scene, 'ResoniteLinkController'] = {}
-
-    # objToSlotData : dict[bpy.types.Object, ObjectSlotData] = {}
-    # sceneToSlotData : dict[bpy.types.Scene, SceneSlotData] = {}
 
     @classmethod
     def Get(cls, scene : bpy.types.Scene):
@@ -87,7 +62,6 @@ class ResoniteLinkController:
         ResoniteLinkController.sceneToResoniteLinkController[scene] = self
     
     def startResoLink(self, context):
-        #global client, clientStarted, clientError, logger, queuedActions, shutdown, lastError, lock
 
         self.logger = logging.getLogger("ResoniteLink")
         self.client = ResoniteLinkWebsocketClient(logger=self.logger)
@@ -139,65 +113,6 @@ class ResoniteLinkController:
 
         self.clientStarted = False
     
-    
-
-    def getSlotKwargs(self, obj : bpy.types.Object, context : bpy.types.Context) -> dict[str, Any]:
-        parentSlotData = ID_SlotData.idToSlotData[obj.parent] if obj.parent is not None else ID_SlotData.idToSlotData[context.scene]
-        localPos = obj.matrix_local.translation.to_tuple()
-        euler = obj.matrix_local.to_euler("XZY")
-        localRotQ = b2u_euler2quaternion(euler)
-        localScale = obj.matrix_local.to_scale().to_tuple() # could use obj.scale here which seems to preserve negative scale
-        return {'name': obj.name,
-                'position': Float3(*b2u_coords(*localPos)),
-                'rotation': FloatQ(localRotQ.x, localRotQ.y, localRotQ.z, localRotQ.w),
-                'scale': Float3(*b2u_scale(*localScale)),
-                'tag': obj.type,
-                'parent': parentSlotData.slot}
-    
-    async def updateSlotAsync(self, slotData : ObjectSlotData, context : bpy.types.Context):
-        obj = slotData.GetObject()
-        await self.client.update_slot(
-            slot=slotData.slot,
-            **self.getSlotKwargs(obj, context)
-        )
-        
-    async def addSlotAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-        slot = await self.client.add_slot(
-            **self.getSlotKwargs(obj, context)
-        )
-        slotData = ObjectSlotData(obj, slot)
-        return slotData
-    
-    async def addMaterialAsync(self, meshSlotData : MeshSlotData):
-        # TODO: Detect the material type
-        mat_type = "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic"
-        
-        # TODO: Detect whether the material exists already
-        matComp = await meshSlotData.slot.add_component(mat_type)
-        
-        # Add the material to the slot
-        meshSlotData.matComps.append(matComp)  # TODO: Put this material on the assets slot in the world
-    
-    async def ensureSlotExistsForObjectAsync(self, obj : bpy.types.Object, context : bpy.types.Context) -> ObjectSlotData:
-        slotData : ObjectSlotData
-
-        if obj.parent is not None:# and not obj.parent in objToSlotData.keys():
-            self.logger.log(logging.INFO, f"Making sure a slot exists for parent object: {obj.parent.name}, {obj.type}")
-            await self.ensureSlotExistsForObjectAsync(obj.parent, context)
-
-        if not obj in ID_SlotData.idToSlotData:
-            slotData = await self.addSlotAsync(obj, context)
-        else:
-            slotData = ID_SlotData.idToSlotData[obj]
-            try:
-                await self.updateSlotAsync(slotData, context)
-            except ResoniteLinkException:
-                ID_SlotData.idToSlotData.pop(obj)
-                slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
-        
-        self.logger.log(logging.INFO, f"{obj.name}, {obj.type} = {slotData.slot.id}")
-        return slotData
-    
     async def sendSceneAsync(self, context : bpy.types.Context):
 
         self.logger.log(logging.INFO, "context debug: " + context.scene.name)
@@ -206,33 +121,16 @@ class ResoniteLinkController:
         scene = context.scene
 
         # Create/Update the scene root slot
-        sceneSlotData : SceneSlotData
-        if not scene in ID_SlotData.idToSlotData:
-            sceneSlot = await self.client.add_slot(
-                name=scene.name,
-                position=Float3(0, 0, 0),
-                rotation=FloatQ(0, 0, 0, 1),
-                scale=Float3(1, 1, 1),
-                tag="SceneRoot"
-            )
-            sceneSlotData = SceneSlotData(scene, sceneSlot)
+        sceneSlotData = SceneSlotData.Get(scene)
+        if sceneSlotData is None:
+            sceneSlotData = SceneSlotData(scene)
+            await sceneSlotData.instantiateAsync(self.client, context)
         else:
-            sceneSlotData : SceneSlotData = ID_SlotData.idToSlotData[scene]
             try:
-                await self.client.update_slot(
-                    sceneSlotData.slot,
-                    name=scene.name
-                )
+                await sceneSlotData.updateAsync(self.client, context)
             except ResoniteLinkException:
-                ID_SlotData.idToSlotData.pop(scene)
-                sceneSlot = await self.client.add_slot(
-                    name=scene.name,
-                    position=Float3(0, 0, 0),
-                    rotation=FloatQ(0, 0, 0, 1),
-                    scale=Float3(1, 1, 1),
-                    tag="SceneRoot"
-                )
-                sceneSlotData = SceneSlotData(scene, sceneSlot)
+                # slot was probably deleted
+                await sceneSlotData.instantiateAsync(self.client, context)
 
         # Store the current evaluated dependency graph
         depsgraph = bpy.context.evaluated_depsgraph_get()
@@ -245,8 +143,18 @@ class ResoniteLinkController:
             self.logger.log(logging.INFO, f"- hide viewport: {obj.hide_viewport}") # doesn't update?
             self.logger.log(logging.INFO, f"- visible: {obj.visible_get()}")
 
-            slotData : ObjectSlotData
-            slotData = await self.ensureSlotExistsForObjectAsync(obj, context)
+            objectSlotData = ObjectSlotData.Get(obj)
+            if objectSlotData is None:
+                objectSlotData = ObjectSlotData(obj)
+                await objectSlotData.instantiateAsync(self.client, context)
+            else:
+                try:
+                    await objectSlotData.updateAsync(self.client, context)
+                except ResoniteLinkException:
+                    # slot was probably deleted
+                    await objectSlotData.instantiateAsync(self.client, context)
+
+            self.logger.log(logging.INFO, f"{obj.name}, {obj.type} = {objectSlotData.slot.id}")
 
             # check if it's a type that stores mesh data 
             if obj.type in ["MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME", "GREASEPENCIL"]:
@@ -257,9 +165,9 @@ class ResoniteLinkController:
 
                 # Only show objects that are active in the render
                 if obj.hide_render:
-                    if isinstance(slotData, MeshSlotData):
+                    if isinstance(objectSlotData, MeshSlotData):
                         # mesh was sent previously
-                        meshSlotData : MeshSlotData = slotData
+                        meshSlotData : MeshSlotData = objectSlotData
                         if not meshSlotData.hidden:
                             meshSlotData.hidden = True
                             try:
@@ -288,12 +196,13 @@ class ResoniteLinkController:
                     continue
 
                 # Set up the mesh slot data for this object
-                if not isinstance(slotData, MeshSlotData):
+                if not isinstance(objectSlotData, MeshSlotData):
                     # New slot data
-                    meshSlotData = MeshSlotData(obj, slotData.slot)
+                    meshSlotData = MeshSlotData(obj)
+                    meshSlotData.slot = objectSlotData.slot
                 else:
                     # Existing slot data
-                    meshSlotData : MeshSlotData = slotData
+                    meshSlotData : MeshSlotData = objectSlotData
                 
                 # Calculate custom normals
                 if (hasattr(mesh, 'calc_normals_split')):
@@ -341,11 +250,11 @@ class ResoniteLinkController:
                 matCount = len(mesh.materials)
                 if matCount > 0 and len(meshSlotData.matComps) < matCount:
                     for mat in mesh.materials:
-                        await self.addMaterialAsync(meshSlotData)
+                        await meshSlotData.addMaterialAsync()
                     newMat = True
                 elif matCount == 0 and len(meshSlotData.matComps) == 0:
                     # Add default material for debugging purposes
-                    await self.addMaterialAsync(meshSlotData)
+                    await meshSlotData.addMaterialAsync()
                     newMat = True
 
                 # Create material component reference list
@@ -420,7 +329,6 @@ class ResoniteLinkMainPanel(bpy.types.Panel):
     bl_context = "scene"
 
     def draw(self, context):
-        #global clientStarted, clientError
 
         controller = ResoniteLinkController.Get(context.scene)
 
