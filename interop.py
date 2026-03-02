@@ -54,7 +54,8 @@ class ID_SlotData():
     async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
         await client.update_slot(
                     self.slot,
-                    name=self.id.name
+                    name=self.id.name,
+                    tag=self.id.id_type
                 )
 
 
