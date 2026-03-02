@@ -10,26 +10,36 @@ from resonitelink.proxies.datamodel.slot_proxy import SlotProxy
 from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 from resonitelink import ResoniteLinkWebsocketClient
 
+import threading
+
 class ID_SlotData():
 
     idToSlotData : dict[bpy.types.ID, 'ID_SlotData'] = {}
+    lock = threading.Lock()
 
     def __init__(self, id : bpy.types.ID):
         self.id : bpy.types.ID = id
         self.slot : SlotProxy = None
-        ID_SlotData.idToSlotData[self.id] = self
+        ID_SlotData.Add(self.id, self)
 
     @classmethod
     def Get(cls, id : bpy.types.ID) -> 'ID_SlotData':
-        if id in ID_SlotData.idToSlotData:
-            return ID_SlotData.idToSlotData[id]
-        else:
-            return None
+        ID_SlotData.lock.acquire()
+        res = ID_SlotData.idToSlotData.get(id, None)
+        ID_SlotData.lock.release()
+        return res
         
     @classmethod
     def Remove(cls, id : bpy.types.ID):
-        if id in ID_SlotData.idToSlotData:
-            ID_SlotData.idToSlotData.pop(id)
+        ID_SlotData.lock.acquire()
+        ID_SlotData.idToSlotData.pop(id)
+        ID_SlotData.lock.release()
+
+    @classmethod
+    def Add(cls, id : bpy.types.ID, idSlotData : ID_SlotData):
+        ID_SlotData.lock.acquire()
+        ID_SlotData.idToSlotData[id] = idSlotData
+        ID_SlotData.lock.release()
 
     # can be overriden if derived classes need more control over the creation of the slot
     async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
@@ -44,20 +54,9 @@ class ID_SlotData():
     async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
         await client.update_slot(
                     self.slot,
-                    name=self.id.name
+                    name=self.id.name,
+                    tag=self.id.id_type
                 )
-
-    # async def createSlotAsync(self):
-    #     pass
-
-    # async def updateSlotAsync(self):
-    #     pass
-
-    # async def createOrUpdateSlotAsync(self):
-    #     if not self.id in ID_SlotData.idToSlotData:
-    #         await self.createSlotAsync()
-    #     else:
-    #         await self.updateSlotAsync()
 
 
 class MaterialSlotData(ID_SlotData):
@@ -69,10 +68,7 @@ class MaterialSlotData(ID_SlotData):
         
     @classmethod
     def Get(cls, mat : bpy.types.Material) -> 'MaterialSlotData':
-        if mat in ID_SlotData.idToSlotData:
-            return ID_SlotData.idToSlotData[mat]
-        else:
-            return None
+        return super().Get(mat)
 
 
 class ObjectSlotData(ID_SlotData):
@@ -82,10 +78,7 @@ class ObjectSlotData(ID_SlotData):
 
     @classmethod
     def Get(cls, obj : bpy.types.Object) -> 'ObjectSlotData':
-        if obj in ID_SlotData.idToSlotData:
-            return ID_SlotData.idToSlotData[obj]
-        else:
-            return None
+        return super().Get(obj)
         
     def getSlotKwargs(self, context : bpy.types.Context) -> dict[str, Any]:
         obj : bpy.types.Object = self.id
@@ -130,11 +123,8 @@ class MeshSlotData(ObjectSlotData):
         self.hidden = False
 
     @classmethod
-    def Get(cls, obj : bpy.types.Object) -> 'ObjectSlotData':
-        if obj in ID_SlotData.idToSlotData:
-            return ID_SlotData.idToSlotData[obj]
-        else:
-            return None
+    def Get(cls, obj : bpy.types.Object) -> 'MeshSlotData':
+        return super().Get(obj)
     
     async def addMaterialAsync(self):
         # TODO: Detect the material type
@@ -151,10 +141,7 @@ class SceneSlotData(ID_SlotData):
 
     @classmethod
     def Get(cls, scene : bpy.types.Scene) -> 'SceneSlotData':
-        if scene in ID_SlotData.idToSlotData:
-            return ID_SlotData.idToSlotData[scene]
-        else:
-            return None
+        return super().Get(scene)
 
 
 def b2u_coords(x, y, z):
