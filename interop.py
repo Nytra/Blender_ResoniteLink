@@ -9,6 +9,7 @@ from resonitelink.models.datamodel import *
 from resonitelink.proxies.datamodel.slot_proxy import SlotProxy
 from resonitelink.proxies.datamodel.component_proxy import ComponentProxy
 from resonitelink import ResoniteLinkWebsocketClient
+from resonitelink.exceptions import ResoniteLinkException
 
 import threading
 
@@ -50,26 +51,127 @@ class ID_SlotData():
                 scale=Float3(1, 1, 1),
                 tag=self.id.id_type
             )
-        
+    
+    # can be overriden if derived classes need more control over the updating of the slot
     async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
         await client.update_slot(
                     self.slot,
                     name=self.id.name,
                     tag=self.id.id_type
                 )
+        
+
+class AssetSlotData(ID_SlotData):
+
+    assetsSlotRoot : SlotProxy = None
+
+    async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        await super().instantiateAsync(client, context)
+        assetsSlotRoot = await AssetSlotData.getAssetsSlotRootAsync(client, context)
+        await client.update_slot(
+            slot=self.slot,
+            parent=assetsSlotRoot
+        )
+        
+    async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        await super().updateAsync(client, context)
+        assetsSlotRoot = await AssetSlotData.getAssetsSlotRootAsync(client, context)
+        await client.update_slot(
+            slot=self.slot,
+            parent=assetsSlotRoot
+        )
+
+    @classmethod
+    async def getAssetsSlotRootAsync(cls, client : ResoniteLinkWebsocketClient, context : bpy.types.Context) -> SlotProxy:
+        if AssetSlotData.assetsSlotRoot is None:
+            AssetSlotData.assetsSlotRoot = await client.add_slot(
+                name="Assets",
+                parent=SceneSlotData.Get(context.scene).slot
+            )
+        else:
+            try:
+                await client.update_slot(
+                    AssetSlotData.assetsSlotRoot,
+                    name="Assets",
+                    parent=SceneSlotData.Get(context.scene).slot
+                )
+            except ResoniteLinkException:
+                AssetSlotData.assetsSlotRoot = None
+                return await AssetSlotData.getAssetsSlotRootAsync(client, context)
+
+        return AssetSlotData.assetsSlotRoot
 
 
-class MaterialSlotData(ID_SlotData):
+class MaterialAssetSlotData(AssetSlotData):
+
+    defaultMaterial : ComponentProxy = None
 
     def __init__(self, mat : bpy.types.Material):
         super().__init__(mat)
-        self.diffuseColor = mat.diffuse_color
-        self.textures = mat.texture_paint_slots
         
     @classmethod
-    def Get(cls, mat : bpy.types.Material) -> 'MaterialSlotData':
+    def Get(cls, mat : bpy.types.Material) -> 'MaterialAssetSlotData':
         return super().Get(mat)
+    
+    async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        await super().instantiateAsync(client, context)
+        color = self.findBaseColor()
+        self.matComp = await self.slot.add_component(
+            "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic",
+            AlbedoColor=Field_ColorX(value=ColorX(color[0], color[1], color[2], color[3]))
+        )
+        
+    async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        await super().updateAsync(client, context)
+        color = self.findBaseColor()
+        self.matComp.update_members(
+            AlbedoColor=Field_ColorX(value=ColorX(color[0], color[1], color[2], color[3]))
+        )
+    
+    def findBaseColor(self):
+        mat : bpy.types.Material = self.id
+        for node in mat.node_tree.nodes:
+            for input in node.inputs:
+                if input.name == "Base Color":
+                    return input.default_value
+        return (1,1,1,1)
+    
+    @classmethod
+    async def AddDefaultMaterialAsync(cls, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        if MaterialAssetSlotData.defaultMaterial is None:
+            assetsSlot = await AssetSlotData.getAssetsSlotRootAsync(client, context)
+            defaultMatSlot = await client.add_slot(
+                name="Default Material (Debug)",
+                parent=assetsSlot
+            )
+            matComp = await defaultMatSlot.add_component("[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic")
+            MaterialAssetSlotData.defaultMaterial = matComp
 
+# class MeshAssetSlotData(AssetSlotData):
+
+#     def __init__(self, mesh : bpy.types.Mesh):
+#         super().__init__(mesh)
+#         self.meshComp : ComponentProxy = None
+        
+#     @classmethod
+#     def Get(cls, mesh : bpy.types.Mesh) -> 'MeshAssetSlotData':
+#         return super().Get(mesh)
+    
+#     async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+#         await super().instantiateAsync(client, context)
+#         mesh : bpy.types.Mesh = self.id
+#         self.meshComp = await self.slot.add_component(
+#             "[FrooxEngine]FrooxEngine.StaticMesh",
+#             URL=Field_Uri(value="")
+#         )
+        
+#     async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+#         await super().updateAsync(client, context)
+#         mat : bpy.types.Material = self.id
+#         self.matComp.update_members(
+#             AlbedoColor=ColorX(mat.diffuse_color[0], mat.diffuse_color[1], mat.diffuse_color[2], mat.diffuse_color[3])
+#         )
+    
 
 class ObjectSlotData(ID_SlotData):
 
@@ -113,28 +215,98 @@ class ObjectSlotData(ID_SlotData):
         )
 
 
-class MeshSlotData(ObjectSlotData):
+class MeshObjectSlotData(ObjectSlotData):
 
     def __init__(self, obj : bpy.types.Object):
         super().__init__(obj)
         self.meshComp : ComponentProxy = None
-        self.matComps : list[ComponentProxy] = [] 
+        self.matData : list[MaterialAssetSlotData] = [] 
         self.meshRenderer : ComponentProxy = None
         self.hidden = False
+        self.assetUrl = ""
 
     @classmethod
-    def Get(cls, obj : bpy.types.Object) -> 'MeshSlotData':
+    def Get(cls, obj : bpy.types.Object) -> 'MeshObjectSlotData':
         return super().Get(obj)
+
+    async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        if self.slot is None:
+            await super().instantiateAsync(client, context)
+
+        if len(self.matData) == 0 and MaterialAssetSlotData.defaultMaterial == None:
+            await MaterialAssetSlotData.AddDefaultMaterialAsync(client, context)
+
+        self.meshComp = await self.slot.add_component(
+            "[FrooxEngine]FrooxEngine.StaticMesh",
+            URL=Field_Uri(value=self.assetUrl)
+        )
+        matRefList = [
+            Reference(
+                target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
+                target_id=matData.matComp.id
+            ) for matData in self.matData
+        ]
+        if len(matRefList) == 0:
+            matRefList = [
+                Reference(
+                    target_id=MaterialAssetSlotData.defaultMaterial.id,
+                    target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>"
+                )
+            ]
+        self.meshRenderer = await self.slot.add_component(
+            "[FrooxEngine]FrooxEngine.MeshRenderer",
+            Mesh=Reference(
+                target_id=self.meshComp.id,
+                target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
+            ),
+            Materials=SyncList(
+                *matRefList
+            ),
+            Enabled=Field_Bool(value=not self.hidden)
+        )
     
-    async def addMaterialAsync(self):
-        # TODO: Detect the material type
-        mat_type = "[FrooxEngine]FrooxEngine.PBS_VertexColorMetallic"
+    # ToDo: make this accept a Mesh as parameter and generate the asset uri internally
+    async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        await super().updateAsync(client, context)
+
+        if len(self.matData) == 0 and MaterialAssetSlotData.defaultMaterial == None:
+            await MaterialAssetSlotData.AddDefaultMaterialAsync(client, context)
+
+        await self.meshComp.update_members(
+            URL=Field_Uri(value=self.assetUrl)
+        )
+        matRefList = [
+            Reference(target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
+                    target_id=matData.matComp.id
+            ) for matData in self.matData
+        ]
+        if len(matRefList) == 0:
+            matRefList = [
+                Reference(
+                    target_id=MaterialAssetSlotData.defaultMaterial.id,
+                    target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>"
+                )
+            ]
+        await self.meshRenderer.update_members(
+            Materials=SyncList(
+                *matRefList
+            ),
+            Enabled=Field_Bool(value=not self.hidden)
+        )
+
+    async def addMaterialAsync(self, mat : bpy.types.Material, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
+        matSlotData = MaterialAssetSlotData.Get(mat)
+        if matSlotData is None:
+            matSlotData = MaterialAssetSlotData(mat)
+            await matSlotData.instantiateAsync(client, context)
+        else:
+            try:
+                await matSlotData.updateAsync(client, context)
+            except ResoniteLinkException:
+                await matSlotData.instantiateAsync(client, context)
         
-        # TODO: Detect whether the material exists already
-        matComp = await self.slot.add_component(mat_type)
-        
-        # Add the material to the slot
-        self.matComps.append(matComp)  # TODO: Put this material on the assets slot in the world
+        if not matSlotData in self.matData:
+            self.matData.append(matSlotData)
     
 
 class SceneSlotData(ID_SlotData):

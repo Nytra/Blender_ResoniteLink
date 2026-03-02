@@ -35,6 +35,7 @@ from .asset_data import *
 
 class ResoniteLinkController:
 
+    # ToDo: make this dict thread-safe
     sceneToResoniteLinkController : dict[bpy.types.Scene, 'ResoniteLinkController'] = {}
 
     @classmethod
@@ -161,9 +162,9 @@ class ResoniteLinkController:
 
                 # Only show objects that are active in the render
                 if obj.hide_render:
-                    if isinstance(objectSlotData, MeshSlotData):
+                    if isinstance(objectSlotData, MeshObjectSlotData):
                         # mesh was sent previously
-                        meshSlotData : MeshSlotData = objectSlotData
+                        meshSlotData : MeshObjectSlotData = objectSlotData
                         if not meshSlotData.hidden:
                             meshSlotData.hidden = True
                             try:
@@ -192,13 +193,16 @@ class ResoniteLinkController:
                     continue
 
                 # Set up the mesh slot data for this object
-                if not isinstance(objectSlotData, MeshSlotData):
+                if not isinstance(objectSlotData, MeshObjectSlotData):
                     # New slot data
-                    meshSlotData = MeshSlotData(obj)
+                    meshSlotData = MeshObjectSlotData(obj)
                     meshSlotData.slot = objectSlotData.slot
+                    await meshSlotData.instantiateAsync(self.client, context)
                 else:
                     # Existing slot data
-                    meshSlotData : MeshSlotData = objectSlotData
+                    meshSlotData : MeshObjectSlotData = objectSlotData
+
+                meshSlotData.hidden = False
                 
                 # Calculate custom normals
                 if (hasattr(mesh, 'calc_normals_split')):
@@ -216,90 +220,49 @@ class ResoniteLinkController:
 
                 # Import the raw mesh data into Resonite
                 asset_url = await self.client.import_mesh_raw_data(**meshData)
-
-                # Create/update the mesh component on the slot to point to the mesh data
-                newMesh = False  # Mesh flag
-                if meshSlotData.meshComp == None:
-                    # TODO: Check for skinned/static
-                    meshSlotData.meshComp = await meshSlotData.slot.add_component(
-                        "[FrooxEngine]FrooxEngine.StaticMesh",
-                        URL=Field_Uri(value=asset_url)
-                    )
-                    newMesh = True  # New mesh was created
-                else:
-                    # Update the existing mesh with the new uploaded data
-                    try:
-                        await self.client.update_component(
-                            meshSlotData.meshComp,
-                            URL=Field_Uri(value=asset_url)
-                        )
-                    except ResoniteLinkException:
-                        # Previously existing component was probably deleted
-                        meshSlotData.meshComp = await meshSlotData.slot.add_component(
-                            "[FrooxEngine]FrooxEngine.StaticMesh",
-                            URL=Field_Uri(value=asset_url)
-                        )
-                        newMesh = True  # New mesh was created
+                meshSlotData.assetUrl = asset_url
 
                 # Add all materials to the asset slot if they don't exist already
-                newMat = False  # Material flag
                 matCount = len(mesh.materials)
-                if matCount > 0 and len(meshSlotData.matComps) < matCount:
+                if matCount > 0 and len(meshSlotData.matData) < matCount:
                     for mat in mesh.materials:
-                        await meshSlotData.addMaterialAsync()
-                    newMat = True
-                elif matCount == 0 and len(meshSlotData.matComps) == 0:
-                    # Add default material for debugging purposes
-                    await meshSlotData.addMaterialAsync()
-                    newMat = True
+                        await meshSlotData.addMaterialAsync(mat, self.client, context)
+
+                await meshSlotData.updateAsync(self.client, context)
+
+                # # Create/update the mesh component on the slot to point to the mesh data
+                # newMesh = False  # Mesh flag
+                # if meshSlotData.meshComp == None:
+                #     # TODO: Check for skinned/static
+                #     meshSlotData.meshComp = await meshSlotData.slot.add_component(
+                #         "[FrooxEngine]FrooxEngine.StaticMesh",
+                #         URL=Field_Uri(value=asset_url)
+                #     )
+                #     newMesh = True  # New mesh was created
+                # else:
+                #     # Update the existing mesh with the new uploaded data
+                #     try:
+                #         await self.client.update_component(
+                #             meshSlotData.meshComp,
+                #             URL=Field_Uri(value=asset_url)
+                #         )
+                #     except ResoniteLinkException:
+                #         # Previously existing component was probably deleted
+                #         meshSlotData.meshComp = await meshSlotData.slot.add_component(
+                #             "[FrooxEngine]FrooxEngine.StaticMesh",
+                #             URL=Field_Uri(value=asset_url)
+                #         )
+                #         newMesh = True  # New mesh was created
+
+                
 
                 # Create material component reference list
-                mat_reflist = [
-                    Reference(
-                        target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
-                        target_id=matComp.id
-                    ) for matComp in meshSlotData.matComps
-                ]
-
-                # Create/update the material data
-                if meshSlotData.meshRenderer == None:
-                    # Add the mesh component to the slot
-                    meshSlotData.meshRenderer = await meshSlotData.slot.add_component(
-                        "[FrooxEngine]FrooxEngine.MeshRenderer",
-                        Mesh=Reference(
-                            target_id=meshSlotData.meshComp.id,
-                            target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
-                        ),
-                        Materials=SyncList(
-                            *mat_reflist
-                        )
-                    )
-                elif newMesh or newMat or meshSlotData.hidden:
-                    meshSlotData.hidden = False
-                    try:
-                        await self.client.update_component(
-                            meshSlotData.meshRenderer,
-                            Mesh=Reference(
-                                target_id=meshSlotData.meshComp.id,
-                                target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
-                            ),
-                            Materials=SyncList(
-                                *mat_reflist
-                            ),
-                            Enabled=Field_Bool(value=True)
-                        )
-                    except ResoniteLinkException:
-                        # comp was probably deleted
-                        meshSlotData.meshRenderer = await meshSlotData.slot.add_component(
-                            "[FrooxEngine]FrooxEngine.MeshRenderer",
-                            Mesh=Reference(
-                                target_id=meshSlotData.meshComp.id,
-                                target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Mesh>"
-                            ),
-                            Materials=SyncList(
-                                *mat_reflist
-                            )
-                        )
+                # mat_reflist = [
+                #     Reference(
+                #         target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
+                #         target_id=matComp.id
+                #     ) for matComp in meshSlotData.matComps
+                # ]
 
                 # Clean up data
                 if (hasattr(mesh, 'calc_normals_split')):
