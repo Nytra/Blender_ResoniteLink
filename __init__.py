@@ -31,7 +31,6 @@ from typing import Any
 
 # Add-on file imports
 from .interop import *
-from .asset_data import *
 
 class ResoniteLinkController:
 
@@ -52,6 +51,8 @@ class ResoniteLinkController:
 
     def __init__(self, scene : bpy.types.Scene):
         ResoniteLinkController.sceneToResoniteLinkController[scene] = self
+        self.logger = logging.getLogger("ResoniteLink")
+        self.logger.setLevel(logging.DEBUG)
         self.resetState()
 
     def resetState(self):
@@ -65,10 +66,16 @@ class ResoniteLinkController:
         self.lastError = ""
     
     def startResoLink(self, context):
-        
-        port = context.scene.ResoniteLink_port
 
-        self.logger = logging.getLogger("ResoniteLink")
+        port : int
+        try:
+            port = int(context.scene.ResoniteLink_port)
+        except:
+            self.lastError = "Could not convert string to int for websocket port"
+            self.logger.log(logging.ERROR, "Error starting ResoniteLink:\n" + self.lastError)
+            self.clientError = True
+            return
+        
         self.client = ResoniteLinkWebsocketClient(logger=self.logger)
         self.client.on_started(self.mainLoopAsync)
         self.client.on_stopped(self.onStoppedAsync)
@@ -114,7 +121,6 @@ class ResoniteLinkController:
 
         self.logger.log(logging.INFO, "context debug: " + context.scene.name)
 
-        # Get the main scene (TODO: Support multiple scenes)
         scene = context.scene
 
         # Create/Update the scene root slot
@@ -140,19 +146,6 @@ class ResoniteLinkController:
             self.logger.log(logging.INFO, f"- hide viewport: {obj.hide_viewport}") # doesn't update?
             self.logger.log(logging.INFO, f"- visible: {obj.visible_get()}")
 
-            objectSlotData = ObjectSlotData.Get(obj)
-            if objectSlotData is None:
-                objectSlotData = ObjectSlotData(obj)
-                await objectSlotData.instantiateAsync(self.client, context)
-            else:
-                try:
-                    await objectSlotData.updateAsync(self.client, context)
-                except ResoniteLinkException:
-                    # slot was probably deleted
-                    await objectSlotData.instantiateAsync(self.client, context)
-
-            self.logger.log(logging.INFO, f"{obj.name}, {obj.type} = {objectSlotData.slot.id}")
-
             # check if it's a type that stores mesh data 
             if obj.type in ["MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME", "GREASEPENCIL"]:
 
@@ -160,24 +153,35 @@ class ResoniteLinkController:
                 if obj.type == "GREASEPENCIL":
                     continue
 
+                newInstance = False
+                # Set up the mesh slot data for this object
+                meshObjectSlotData = MeshObjectSlotData.Get(obj)
+                if meshObjectSlotData is not None and not isinstance(meshObjectSlotData, MeshObjectSlotData):
+                    meshObjectSlotData = MeshObjectSlotData(obj)
+                    newInstance = True
+
                 # Only show objects that are active in the render
                 if obj.hide_render:
-                    if isinstance(objectSlotData, MeshObjectSlotData):
+                    if meshObjectSlotData is not None:
                         # mesh was sent previously
-                        meshSlotData : MeshObjectSlotData = objectSlotData
-                        if not meshSlotData.hidden:
-                            meshSlotData.hidden = True
+                        if not meshObjectSlotData.hidden:
+                            meshObjectSlotData.hidden = True
                             try:
                                 await self.client.update_component(
-                                    meshSlotData.meshRenderer,
+                                    meshObjectSlotData.meshRenderer,
                                     Enabled=Field_Bool(value=False)
                                 )
                             except ResoniteLinkException:
                                 # renderer component probably got deleted
                                 pass
                     continue
+                
+                if meshObjectSlotData is None:
+                    # New slot data
+                    meshObjectSlotData = MeshObjectSlotData(obj)
+                    newInstance = True
 
-               # Evaluate mesh data with all current modifiers
+                # Evaluate mesh data with all current modifiers
                 eval_obj : bpy.types.Object = obj.evaluated_get(depsgraph)
 
                 # if obj.type == "GREASEPENCIL":
@@ -185,96 +189,53 @@ class ResoniteLinkController:
                 #     drawing : bpy.types.GreasePencilDrawing = gp.layers[0].frames[0].drawing
                 #     logger.log(logging.INFO, f"grease pencil strokes: {drawing.strokes}") # strokes is documented on this page: https://developer.blender.org/docs/release_notes/4.3/grease_pencil_migration/
 
-                mesh = eval_obj.to_mesh() # this can throw a RuntimeError in some cases, like for Grease pencil objects whose mesh data can't be accessed this way
+                #mesh = eval_obj.to_mesh() # this can throw a RuntimeError in some cases, like for Grease pencil objects whose mesh data can't be accessed this way
+
+                mesh = eval_obj.data
 
                 if len(mesh.vertices) == 0:
                     self.logger.log(logging.INFO, f"mesh has no vertices, skipping") # can happen in the case of metaballs- one of them will contain the whole mesh and the rest will be empty
-                    eval_obj.to_mesh_clear()
+                    #eval_obj.to_mesh_clear()
                     continue
 
-                # Set up the mesh slot data for this object
-                if not isinstance(objectSlotData, MeshObjectSlotData):
-                    # New slot data
-                    meshSlotData = MeshObjectSlotData(obj)
-                    meshSlotData.slot = objectSlotData.slot
-                    await meshSlotData.instantiateAsync(self.client, context)
-                else:
-                    # Existing slot data
-                    meshSlotData : MeshObjectSlotData = objectSlotData
+                meshObjectSlotData.hidden = False
 
-                meshSlotData.hidden = False
-                
-                # Calculate custom normals
-                if (hasattr(mesh, 'calc_normals_split')):
-                    # Old method (4.0)
-                    mesh.calc_normals_split()
-                else:
-                    # TODO: New method
-                    #mesh.customdata_custom_splitnormals_add()
-                    pass
-
-                # Triangulate the evaluated mesh
-                mesh.calc_loop_triangles()
-
-                meshData = collectMeshData(mesh)
-
-                # Import the raw mesh data into Resonite
-                asset_url = await self.client.import_mesh_raw_data(**meshData)
-                meshSlotData.assetUrl = asset_url
-
-                # Add all materials to the asset slot if they don't exist already
                 matCount = len(mesh.materials)
-                if matCount > 0 and len(meshSlotData.matData) < matCount:
+                meshObjectSlotData.matData = [] # rebuild the list of materials from scratch in case they changed
+                if matCount > 0:
+                    i = 0
                     for mat in mesh.materials:
-                        await meshSlotData.addMaterialAsync(mat, self.client, context)
+                        if len(meshObjectSlotData.matData) < i+1 or meshObjectSlotData.matData[i].id != mat:
+                            await meshObjectSlotData.addOrUpdateMaterialAsync(mat, self.client, context)
+                        i += 1
 
-                await meshSlotData.updateAsync(self.client, context)
+                await meshObjectSlotData.addOrUpdateMeshAsync(mesh, self.client, context)
 
-                # # Create/update the mesh component on the slot to point to the mesh data
-                # newMesh = False  # Mesh flag
-                # if meshSlotData.meshComp == None:
-                #     # TODO: Check for skinned/static
-                #     meshSlotData.meshComp = await meshSlotData.slot.add_component(
-                #         "[FrooxEngine]FrooxEngine.StaticMesh",
-                #         URL=Field_Uri(value=asset_url)
-                #     )
-                #     newMesh = True  # New mesh was created
-                # else:
-                #     # Update the existing mesh with the new uploaded data
-                #     try:
-                #         await self.client.update_component(
-                #             meshSlotData.meshComp,
-                #             URL=Field_Uri(value=asset_url)
-                #         )
-                #     except ResoniteLinkException:
-                #         # Previously existing component was probably deleted
-                #         meshSlotData.meshComp = await meshSlotData.slot.add_component(
-                #             "[FrooxEngine]FrooxEngine.StaticMesh",
-                #             URL=Field_Uri(value=asset_url)
-                #         )
-                #         newMesh = True  # New mesh was created
-
-                
-
-                # Create material component reference list
-                # mat_reflist = [
-                #     Reference(
-                #         target_type="[FrooxEngine]FrooxEngine.IAssetProvider<[FrooxEngine]FrooxEngine.Material>",
-                #         target_id=matComp.id
-                #     ) for matComp in meshSlotData.matComps
-                # ]
-
-                # Clean up data
-                if (hasattr(mesh, 'calc_normals_split')):
-                    mesh.free_normals_split()
+                if newInstance:
+                    await meshObjectSlotData.instantiateAsync(self.client, context)
                 else:
-                    # mesh.customdata_custom_splitnormals_clear()
-                    pass
+                    try:
+                        await meshObjectSlotData.updateAsync(self.client, context)
+                    except ResoniteLinkException:
+                        # slot was probably deleted
+                        await meshObjectSlotData.instantiateAsync(self.client, context)
 
-                if meshData['tangents'] is not None:
-                    mesh.free_tangents()
-                
-                eval_obj.to_mesh_clear()
+                self.logger.log(logging.INFO, f"{obj.name}, {obj.type} = {meshObjectSlotData.slot.id}")
+
+                #eval_obj.to_mesh_clear()
+            else:
+                objectSlotData = ObjectSlotData.Get(obj)
+                if objectSlotData is None:
+                    objectSlotData = ObjectSlotData(obj)
+                    await objectSlotData.instantiateAsync(self.client, context)
+                else:
+                    try:
+                        await objectSlotData.updateAsync(self.client, context)
+                    except ResoniteLinkException:
+                        # slot was probably deleted
+                        await objectSlotData.instantiateAsync(self.client, context)
+
+                self.logger.log(logging.INFO, f"{obj.name}, {obj.type} = {objectSlotData.slot.id}")
         
         self.logger.log(logging.INFO, f"Done!")
 
@@ -394,7 +355,6 @@ class SendSceneOperator(bpy.types.Operator):
         controller.lock.release()
 
         return {'FINISHED'}            # Lets Blender know the operator finished successfully.
-    
 
 def register():
     bpy.utils.register_class(SendSceneOperator)
@@ -402,7 +362,8 @@ def register():
     bpy.utils.register_class(ConnectOperator)
     bpy.utils.register_class(DisconnectOperator)
     bpy.utils.register_class(ErrorDialogOperator)
-    bpy.types.Scene.ResoniteLink_port = bpy.props.IntProperty(name="Websocket Port", default=2000, min=2000, max=65535)
+    #bpy.types.Scene.ResoniteLink_port = bpy.props.IntProperty(name="Websocket Port", default=2000, min=2000, max=65535)
+    bpy.types.Scene.ResoniteLink_port = bpy.props.StringProperty(name="Websocket Port", default="2000")
 
 def unregister():
 
