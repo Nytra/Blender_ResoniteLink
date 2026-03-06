@@ -1,4 +1,5 @@
 # Blender Imports
+import logging
 from typing import Any
 
 import bpy
@@ -23,7 +24,6 @@ class ID_SlotData():
     def __init__(self, id : bpy.types.ID):
         self.id : bpy.types.ID = id
         self.slot : SlotProxy = None
-        ID_SlotData.Add(self.id, self)
 
     @classmethod
     def Get(cls, id : bpy.types.ID) -> 'ID_SlotData':
@@ -36,6 +36,12 @@ class ID_SlotData():
     def Remove(cls, id : bpy.types.ID):
         ID_SlotData.lock.acquire()
         ID_SlotData.idToSlotData.pop(id)
+        ID_SlotData.lock.release()
+
+    @classmethod
+    def Clear(cls):
+        ID_SlotData.lock.acquire()
+        ID_SlotData.idToSlotData = {}
         ID_SlotData.lock.release()
 
     @classmethod
@@ -94,7 +100,7 @@ class AssetSlotData(ID_SlotData):
                     name="Assets",
                     parent=SceneSlotData.Get(context.scene).slot
                 )
-            except ResoniteLinkException:
+            except:
                 AssetSlotData.assetsSlotRoot = None
                 return await AssetSlotData.getAssetsSlotRootAsync(client, context)
 
@@ -357,11 +363,13 @@ class ObjectSlotData(ID_SlotData):
         if obj.parent is not None:
             par = ObjectSlotData.Get(obj.parent)
             if par is None:
-                await ObjectSlotData(obj.parent).instantiateAsync(client, context)
+                par = ObjectSlotData(obj.parent)
+                ID_SlotData.Add(obj.parent, par)
+                await par.instantiateAsync(client, context)
             else:
                 try:
                     await par.updateAsync(client, context)
-                except ResoniteLinkException:
+                except:
                     # slot was probably deleted
                     await par.instantiateAsync(client, context)
     
@@ -468,11 +476,12 @@ class MeshObjectSlotData(ObjectSlotData):
         matSlotData = MaterialAssetSlotData.Get(mat)
         if matSlotData is None:
             matSlotData = MaterialAssetSlotData(mat)
+            ID_SlotData.Add(mat, matSlotData)
             await matSlotData.instantiateAsync(client, context)
         else:
             try:
                 await matSlotData.updateAsync(client, context)
-            except ResoniteLinkException: # doesn't throw ResoniteLinkException if it fails
+            except: 
                 await matSlotData.instantiateAsync(client, context)
         
         self.matData.append(matSlotData)
@@ -481,11 +490,12 @@ class MeshObjectSlotData(ObjectSlotData):
         meshSlotData = MeshAssetSlotData.Get(mesh)
         if meshSlotData is None:
             meshSlotData = MeshAssetSlotData(mesh)
+            ID_SlotData.Add(mesh, meshSlotData)
             await meshSlotData.instantiateAsync(client, context)
         else:
             try:
                 await meshSlotData.updateAsync(client, context)
-            except ResoniteLinkException: # doesn't throw ResoniteLinkException if it fails
+            except: 
                 await meshSlotData.instantiateAsync(client, context)
         
         self.meshData = meshSlotData

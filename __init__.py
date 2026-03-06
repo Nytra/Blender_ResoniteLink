@@ -127,12 +127,16 @@ class ResoniteLinkController:
         sceneSlotData = SceneSlotData.Get(scene)
         if sceneSlotData is None:
             sceneSlotData = SceneSlotData(scene)
+            ID_SlotData.Clear()
+            ID_SlotData.Add(scene, sceneSlotData)
             await sceneSlotData.instantiateAsync(self.client, context)
         else:
             try:
                 await sceneSlotData.updateAsync(self.client, context)
-            except ResoniteLinkException:
+            except:
                 # slot was probably deleted
+                ID_SlotData.Clear()
+                ID_SlotData.Add(scene, sceneSlotData)
                 await sceneSlotData.instantiateAsync(self.client, context)
 
         # Store the current evaluated dependency graph
@@ -149,6 +153,8 @@ class ResoniteLinkController:
             # check if it's a type that stores mesh data 
             if obj.type in ["MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME", "GREASEPENCIL"]:
 
+                self.logger.log(logging.INFO, f"IS A MESH: {obj.session_uid}")
+
                 # Grease pencil technically could work but needs extra code to handle it
                 if obj.type == "GREASEPENCIL":
                     continue
@@ -156,9 +162,7 @@ class ResoniteLinkController:
                 newInstance = False
                 # Set up the mesh slot data for this object
                 meshObjectSlotData = MeshObjectSlotData.Get(obj)
-                if meshObjectSlotData is not None and not isinstance(meshObjectSlotData, MeshObjectSlotData):
-                    meshObjectSlotData = MeshObjectSlotData(obj)
-                    newInstance = True
+                # if meshObjectSlotData is not None and 
 
                 # Only show objects that are active in the render
                 if obj.hide_render:
@@ -171,7 +175,7 @@ class ResoniteLinkController:
                                     meshObjectSlotData.meshRenderer,
                                     Enabled=Field_Bool(value=False)
                                 )
-                            except ResoniteLinkException:
+                            except:
                                 # renderer component probably got deleted
                                 pass
                     continue
@@ -179,7 +183,14 @@ class ResoniteLinkController:
                 if meshObjectSlotData is None:
                     # New slot data
                     meshObjectSlotData = MeshObjectSlotData(obj)
+                    ID_SlotData.Add(obj, meshObjectSlotData)
                     newInstance = True
+                elif not isinstance(meshObjectSlotData, MeshObjectSlotData):
+                    temp = meshObjectSlotData.slot
+                    meshObjectSlotData = MeshObjectSlotData(obj)
+                    meshObjectSlotData.slot = temp
+                    ID_SlotData.Add(obj, meshObjectSlotData)
+                    #newInstance = True
 
                 # Evaluate mesh data with all current modifiers
                 eval_obj : bpy.types.Object = obj.evaluated_get(depsgraph)
@@ -208,7 +219,7 @@ class ResoniteLinkController:
                         if len(meshObjectSlotData.matData) < i+1 or meshObjectSlotData.matData[i].id != mat:
                             await meshObjectSlotData.addOrUpdateMaterialAsync(mat, self.client, context)
                         i += 1
-
+                
                 await meshObjectSlotData.addOrUpdateMeshAsync(mesh, self.client, context)
 
                 if newInstance:
@@ -216,7 +227,7 @@ class ResoniteLinkController:
                 else:
                     try:
                         await meshObjectSlotData.updateAsync(self.client, context)
-                    except ResoniteLinkException:
+                    except:
                         # slot was probably deleted
                         await meshObjectSlotData.instantiateAsync(self.client, context)
 
@@ -224,14 +235,17 @@ class ResoniteLinkController:
 
                 #eval_obj.to_mesh_clear()
             else:
+                self.logger.log(logging.INFO, f"NOT A MESH: {obj.session_uid}")
+
                 objectSlotData = ObjectSlotData.Get(obj)
                 if objectSlotData is None:
                     objectSlotData = ObjectSlotData(obj)
+                    ID_SlotData.Add(obj, objectSlotData)
                     await objectSlotData.instantiateAsync(self.client, context)
                 else:
                     try:
                         await objectSlotData.updateAsync(self.client, context)
-                    except ResoniteLinkException:
+                    except:
                         # slot was probably deleted
                         await objectSlotData.instantiateAsync(self.client, context)
 
