@@ -52,7 +52,7 @@ class ResoniteLinkController:
     def __init__(self, scene : bpy.types.Scene):
         ResoniteLinkController.sceneToResoniteLinkController[scene] = self
         self.logger = logging.getLogger("ResoniteLink")
-        self.logger.setLevel(logging.DEBUG)
+        #self.logger.setLevel(logging.DEBUG)
         self.resetState()
 
     def resetState(self):
