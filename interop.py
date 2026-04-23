@@ -18,6 +18,7 @@ import threading
 
 class ID_SlotData():
 
+    # ToDo: make this dictionary be per-scene
     idToSlotData : dict[bpy.types.ID, 'ID_SlotData'] = {}
     lock = threading.Lock()
 
@@ -187,7 +188,7 @@ class MeshAssetSlotData(AssetSlotData):
 
         return asset_url
     
-    def collectMeshData(self):
+    def collectMeshData(self) -> dict[str, Any]:
 
         mesh : bpy.types.Mesh = self.id
 
@@ -404,8 +405,6 @@ class MeshObjectSlotData(ObjectSlotData):
     @classmethod
     def Get(cls, obj : bpy.types.Object) -> 'MeshObjectSlotData':
         res = super().Get(obj)
-        # if isinstance(res, MeshObjectSlotData):
-        #     return res
         return res
 
     async def instantiateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
@@ -441,7 +440,6 @@ class MeshObjectSlotData(ObjectSlotData):
             Enabled=Field_Bool(value=not self.hidden)
         )
     
-    # ToDo: make this accept a Mesh as parameter and generate the asset uri internally
     async def updateAsync(self, client : ResoniteLinkWebsocketClient, context : bpy.types.Context):
         await super().updateAsync(client, context)
 
